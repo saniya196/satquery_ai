@@ -1,0 +1,16 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# Data / models
+ml/data/
+*.zip
+*.tif
+backend/models/*.pt
+
+# Env
+.env
