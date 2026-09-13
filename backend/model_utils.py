@@ -59,3 +59,37 @@ def analyze_tif(file_bytes: bytes) -> dict:
         "ndvi": summarize_index(ndvi),
         "ndwi": summarize_index(ndwi),
     }
+def generate_answer(analysis: dict, question: str) -> dict:
+    cls = analysis["classification"]["class"]
+    conf = analysis["classification"]["confidence"]
+    ndvi_mean = analysis["ndvi"]["mean"]
+    ndwi_mean = analysis["ndwi"]["mean"]
+
+    if ndvi_mean > 0.3:
+        veg_level = "high"
+    elif ndvi_mean > 0.1:
+        veg_level = "moderate"
+    else:
+        veg_level = "low"
+
+    water_present = ndwi_mean > 0
+
+    answer = (
+        f"This image is classified as '{cls}' with {conf*100:.1f}% confidence. "
+        f"The NDVI value is {ndvi_mean:.3f}, indicating {veg_level} vegetation presence. "
+    )
+    if water_present:
+        answer += f"The NDWI value ({ndwi_mean:.3f}) suggests water is likely present in this region."
+    else:
+        answer += f"The NDWI value ({ndwi_mean:.3f}) suggests no significant water presence."
+
+    return {
+        "answer": answer,
+        "evidence": {
+            "class": cls,
+            "confidence": conf,
+            "ndvi_mean": ndvi_mean,
+            "ndwi_mean": ndwi_mean,
+        },
+        "question": question,
+    }
