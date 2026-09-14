@@ -1,3 +1,46 @@
+import sqlite3
+from datetime import datetime
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "history.db")
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT,
+            question TEXT,
+            answer TEXT,
+            class TEXT,
+            confidence REAL,
+            ndvi_mean REAL,
+            ndwi_mean REAL,
+            timestamp TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def save_to_history(filename: str, result: dict):
+    conn = sqlite3.connect(DB_PATH)
+    ev = result["evidence"]
+    conn.execute(
+        "INSERT INTO history (filename, question, answer, class, confidence, ndvi_mean, ndwi_mean, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (filename, result["question"], result["answer"], ev["class"], ev["confidence"],
+         ev["ndvi_mean"], ev["ndwi_mean"], datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+def get_history(limit: int = 20):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT * FROM history ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
 import sys, os
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "ml", "src"))
 

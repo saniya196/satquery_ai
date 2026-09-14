@@ -1,6 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
-from model_utils import analyze_tif, generate_answer
+from model_utils import analyze_tif, generate_answer, save_to_history, get_history
 
 app = FastAPI(title="SatQuery AI Backend")
 
@@ -26,4 +26,9 @@ async def query(file: UploadFile = File(...), question: str = Form("")):
     contents = await file.read()
     analysis, bands = analyze_tif(contents)
     result = generate_answer(analysis, question, bands)
+    save_to_history(file.filename, result)
     return result
+
+@app.get("/history")
+def history():
+    return get_history()
