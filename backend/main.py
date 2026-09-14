@@ -18,11 +18,12 @@ def root():
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...)):
     contents = await file.read()
-    result = analyze_tif(contents)
+    result, _ = analyze_tif(contents)
     return result
+
 @app.post("/query")
 async def query(file: UploadFile = File(...), question: str = Form("")):
     contents = await file.read()
-    analysis = analyze_tif(contents)
-    result = generate_answer(analysis, question)
+    analysis, bands = analyze_tif(contents)
+    result = generate_answer(analysis, question, bands)
     return result
