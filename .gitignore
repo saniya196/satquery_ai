@@ -12,5 +12,8 @@ ml/data/
 *.tif
 backend/models/*.pt
 
+# Database
+backend/history.db
+
 # Env
 .env
