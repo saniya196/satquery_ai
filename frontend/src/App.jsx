@@ -17,20 +17,25 @@ function App() {
     setResult(null);
   };
 
-  const drawEvidenceBox = (box) => {
+  const drawEvidenceBox = (imageBase64, box) => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const img = new Image();
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-    const scale = canvas.width / 64;
-    ctx.strokeStyle = "red";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(
-      box.x0 * scale,
-      box.y0 * scale,
-      (box.x1 - box.x0) * scale,
-      (box.y1 - box.y0) * scale
-    );
+      const scale = canvas.width / 64;
+      ctx.strokeStyle = "red";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(
+        box.x0 * scale,
+        box.y0 * scale,
+        (box.x1 - box.x0) * scale,
+        (box.y1 - box.y0) * scale
+      );
+    };
+    img.src = "data:image/png;base64," + imageBase64;
   };
 
   const handleSubmit = async () => {
@@ -46,7 +51,7 @@ function App() {
     try {
       const res = await axios.post(`${API_BASE}/query`, formData);
       setResult(res.data);
-      setTimeout(() => drawEvidenceBox(res.data.evidence.region.box), 100);
+      setTimeout(() => drawEvidenceBox(res.data.image_base64, res.data.evidence.region.box), 100);
       fetchHistory();
     } catch (err) {
       alert("Error: " + err.message);

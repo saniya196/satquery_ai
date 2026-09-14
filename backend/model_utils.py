@@ -1,3 +1,5 @@
+import io
+import base64
 import sys, os
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "ml", "src"))
 
@@ -104,9 +106,9 @@ def analyze_tif(file_bytes: bytes) -> tuple:
         "ndvi": summarize_index(ndvi),
         "ndwi": summarize_index(ndwi),
     }
-    return result, bands
+    return result, bands, rgb
 
-def generate_answer(analysis: dict, question: str, bands: np.ndarray) -> dict:
+def generate_answer(analysis: dict, question: str, bands: np.ndarray, rgb: np.ndarray) -> dict:
     cls = analysis["classification"]["class"]
     conf = analysis["classification"]["confidence"]
     ndvi_mean = analysis["ndvi"]["mean"]
@@ -132,6 +134,7 @@ def generate_answer(analysis: dict, question: str, bands: np.ndarray) -> dict:
         answer += f"The NDWI value ({ndwi_mean:.3f}) suggests no significant water presence."
 
     evidence_region = get_evidence_region(bands, focus=focus)
+    image_base64 = encode_rgb_preview(rgb)
 
     return {
         "answer": answer,
@@ -143,6 +146,7 @@ def generate_answer(analysis: dict, question: str, bands: np.ndarray) -> dict:
             "region": evidence_region,
         },
         "question": question,
+        "image_base64": image_base64,
     }
 def get_evidence_region(bands: np.ndarray, focus: str = "vegetation") -> dict:
     """
@@ -176,3 +180,10 @@ def get_evidence_region(bands: np.ndarray, focus: str = "vegetation") -> dict:
                 best_box = {"x0": int(x0), "y0": int(y0), "x1": int(x1), "y1": int(y1)}
 
     return {"box": best_box, "focus": focus, "score": round(float(best_score), 4)}
+
+def encode_rgb_preview(rgb: np.ndarray) -> str:
+    """Encodes an HxWx3 float [0,1] array as a base64 PNG string."""
+    img = Image.fromarray((rgb * 255).astype(np.uint8))
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
