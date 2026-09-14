@@ -1,5 +1,18 @@
+import sys, os
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "ml", "src"))
+
+import torch
+import torch.nn as nn
+import torchvision
+import numpy as np
+from PIL import Image
+from rasterio.io import MemoryFile
 import sqlite3
 from datetime import datetime
+
+
+from preprocessing import compute_ndvi, compute_ndwi, get_rgb_preview, summarize_index
+
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "history.db")
 
@@ -41,17 +54,6 @@ def get_history(limit: int = 20):
     conn.close()
     return [dict(r) for r in rows]
 
-import sys, os
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "ml", "src"))
-
-import torch
-import torch.nn as nn
-import torchvision
-import numpy as np
-from PIL import Image
-from rasterio.io import MemoryFile
-
-from preprocessing import compute_ndvi, compute_ndwi, get_rgb_preview, summarize_index
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "eurosat_classifier.pt")
 
