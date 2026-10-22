@@ -185,8 +185,8 @@ export interface JobStage {
 
 export interface JobDataProvider {
   name: string
-  tile?: string
-  date?: string
+  tile?: string | null
+  date?: string | null
 }
 
 export interface JobResponse {

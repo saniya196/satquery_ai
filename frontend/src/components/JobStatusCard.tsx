@@ -9,21 +9,23 @@ interface JobStatusCardProps {
 export const JobStatusCard: React.FC<JobStatusCardProps> = ({ job, activeJobId }) => {
   if (!job && !activeJobId) return null
 
-  const displayJobId = job?.job_id || activeJobId || 'job_20251021_001'
-  const status = job?.status || 'processing'
+  const displayJobId = job?.job_id || activeJobId || ''
+  const status = job?.status || 'queued'
 
-  const stages = job?.stages || [
-    { name: 'Data Fetching (Sentinel-2)', status: status === 'queued' ? 'processing' : 'completed', duration: '2m 12s' },
-    { name: 'Preprocessing', status: status === 'processing' ? 'processing' : status === 'completed' ? 'completed' : 'queued', duration: '3m 45s' },
-    { name: 'Analysis', status: status === 'completed' ? 'completed' : 'queued', duration: '4m 32s' },
-    { name: 'Results Ready', status: status === 'completed' ? 'completed' : 'queued', duration: '5m 10s' },
-  ]
+  // No fallback stages or provider metadata: the backend reports these only when it
+  // actually measured or observed them, so the card must never invent values.
+  const stages = job?.stages ?? []
+  const provider = job?.provider_info
+  // A failed job never reports a stage, so the stepper would otherwise leave a
+  // spinner running on a run that already stopped. App.tsx surfaces the error.
+  const showStepper = status !== 'failed' && stages.length > 0
 
-  const provider = job?.provider_info || {
-    name: 'Sentinel-2',
-    tile: 'T41PFT',
-    date: '18 Oct 2025',
-  }
+  const statusLabel =
+    status === 'completed' ? 'Completed'
+      : status === 'failed' ? 'Failed'
+        : status === 'queued' ? 'Queued'
+          : 'Processing'
+  const statusTone = status === 'completed' ? 'valid' : status === 'failed' ? 'invalid' : 'processing'
 
   return (
     <div className="job-status-panel-card">
@@ -32,38 +34,40 @@ export const JobStatusCard: React.FC<JobStatusCardProps> = ({ job, activeJobId }
           <span className="card-kicker">Job Status</span>
           <h3>Job ID: <span className="job-id-mono">{displayJobId.slice(0, 16)}</span></h3>
         </div>
-        <span className={`status-pill status-${status === 'completed' ? 'valid' : status === 'failed' ? 'invalid' : 'processing'}`}>
-          {status === 'completed' ? 'Completed' : status === 'failed' ? 'Failed' : 'Processing'}
+        <span className={`status-pill status-${statusTone}`}>
+          {statusLabel}
         </span>
       </div>
 
-      <div className="job-stepper-list">
-        {stages.map((stage, idx) => {
-          const isDone = stage.status === 'completed'
-          const isCurrent = stage.status === 'processing'
-          return (
-            <div key={`${stage.name}-${idx}`} className={`job-step-row ${isDone ? 'step-done' : isCurrent ? 'step-current' : 'step-pending'}`}>
-              <div className="step-icon-col">
-                {isDone ? (
-                  <span className="step-check-icon">✓</span>
-                ) : isCurrent ? (
-                  <span className="step-spinner-icon" />
-                ) : (
-                  <span className="step-pending-icon">○</span>
+      {showStepper && (
+        <div className="job-stepper-list">
+          {stages.map((stage, idx) => {
+            const isDone = stage.status === 'completed'
+            const isCurrent = stage.status === 'processing'
+            return (
+              <div key={`${stage.name}-${idx}`} className={`job-step-row ${isDone ? 'step-done' : isCurrent ? 'step-current' : 'step-pending'}`}>
+                <div className="step-icon-col">
+                  {isDone ? (
+                    <span className="step-check-icon">✓</span>
+                  ) : isCurrent ? (
+                    <span className="step-spinner-icon" />
+                  ) : (
+                    <span className="step-pending-icon">○</span>
+                  )}
+                </div>
+                <div className="step-name-col">
+                  <span className="step-name">{stage.name}</span>
+                </div>
+                {stage.duration && (
+                  <div className="step-duration-col">
+                    <span className="step-duration">✓ {stage.duration}</span>
+                  </div>
                 )}
               </div>
-              <div className="step-name-col">
-                <span className="step-name">{stage.name}</span>
-              </div>
-              {stage.duration && (
-                <div className="step-duration-col">
-                  <span className="step-duration">✓ {stage.duration}</span>
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
 
       <div className="data-provider-section">
         <span className="section-small-title">Data Provider</span>
@@ -75,11 +79,15 @@ export const JobStatusCard: React.FC<JobStatusCardProps> = ({ job, activeJobId }
               <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
               <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
             </svg>
-            <strong>{provider.name || 'Sentinel-2'}</strong>
+            <strong>{provider?.name || 'Sentinel-2'}</strong>
           </div>
           <div className="provider-details-chips">
-            <span className="provider-chip">Tile: <strong>{provider.tile || 'T41PFT'}</strong></span>
-            <span className="provider-chip">Date: <strong>{provider.date || '18 Oct 2025'}</strong></span>
+            {provider?.tile && (
+              <span className="provider-chip">Tile: <strong>{provider.tile}</strong></span>
+            )}
+            {provider?.date && (
+              <span className="provider-chip">Date: <strong>{provider.date}</strong></span>
+            )}
           </div>
         </div>
       </div>

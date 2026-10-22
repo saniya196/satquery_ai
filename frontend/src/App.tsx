@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   compareAnalysis,
@@ -61,6 +61,11 @@ export default function App() {
   const [compareMonthB, setCompareMonthB] = useState('September')
   const [panelCollapsed, setPanelCollapsed] = useState(false)
 
+  // Mirrors of the latest query and AOI so the job poller can read them without
+  // being torn down and restarted on every keystroke or redraw.
+  const queryRef = useRef(query)
+  const aoiRef = useRef(aoi)
+
   function showRequestError(error: unknown) {
     const friendly = friendlyApiError(error)
     setRequestError(`${friendly.message} ${friendly.suggestion}`)
@@ -83,6 +88,11 @@ export default function App() {
   }
 
   useEffect(() => { void refreshHistory() }, [])
+
+  useEffect(() => {
+    queryRef.current = query
+    aoiRef.current = aoi
+  }, [query, aoi])
 
   useEffect(() => {
     if (!activeJobId) return
@@ -110,9 +120,9 @@ export default function App() {
               setActiveRecord({
                 id: activeJobId,
                 created: next.created ?? new Date().toISOString(),
-                query,
+                query: queryRef.current,
                 structured_query: next.structured_query ?? {},
-                aoi: aoi ?? { type: 'Polygon', coordinates: [] },
+                aoi: aoiRef.current ?? { type: 'Polygon', coordinates: [] },
                 operation: next.result.facts.operation,
                 status: 'completed',
                 result: next.result,

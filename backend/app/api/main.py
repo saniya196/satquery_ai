@@ -654,12 +654,59 @@ def _run_operation(q, aoi: dict, max_cloud: float, provider: SatelliteProvider, 
     raise SatQueryError(f"'{q.operation.value}' is not implemented in this build yet.")
 
 
+# MGRS tile inside a STAC item id. Earth Search uses ids like "S2C_44QMD_20251018_0_L2A"
+# while Copernicus-style ids carry an explicit "T" prefix ("..._T41PFT_...").
+_MGRS_TILE_RE = re.compile(r"(?:^|_)(T?\d{2}[A-Z]{3})(?=_|$)")
+
+_MAX_METADATA_VALUES = 3
+
+
 def _format_duration(seconds: float) -> str:
-    secs = int(max(1, seconds))
+    if seconds < 1:
+        return "<1s"
+    secs = int(seconds)
     m, s = divmod(secs, 60)
     if m > 0:
         return f"{m}m {s:02d}s"
     return f"{s}s"
+
+
+def _distinct_join(values: list[str]) -> str | None:
+    """Join distinct values for display, or return None when there are none."""
+    if not values:
+        return None
+    shown = values[:_MAX_METADATA_VALUES]
+    label = ", ".join(shown)
+    if len(values) > len(shown):
+        label += f" +{len(values) - len(shown)} more"
+    return label
+
+
+def _scene_metadata(result: dict) -> tuple[str | None, str | None]:
+    """Derive the provider tile and acquisition date from the evidence scenes.
+
+    Returns (None, None) when the evidence does not establish them. Values from
+    multi-scene analyses are listed rather than collapsed onto the first scene.
+    """
+    evidence = result.get("evidence") or {}
+    scenes = evidence.get("scenes") or []
+    tiles: list[str] = []
+    dates: list[str] = []
+    for scene in scenes:
+        if not isinstance(scene, dict):
+            continue
+        match = _MGRS_TILE_RE.search(str(scene.get("item_id") or ""))
+        if match and match.group(1) not in tiles:
+            tiles.append(match.group(1))
+        raw_dt = scene.get("datetime")
+        if raw_dt:
+            try:
+                label = datetime.fromisoformat(str(raw_dt).replace("Z", "+00:00")).strftime("%d %b %Y")
+            except ValueError:
+                label = str(raw_dt)[:10]
+            if label not in dates:
+                dates.append(label)
+    return _distinct_join(tiles), _distinct_join(dates)
 
 
 def _execute(job_id: str, q, aoi: dict, max_cloud: float, provider: SatelliteProvider):
@@ -681,30 +728,12 @@ def _execute(job_id: str, q, aoi: dict, max_cloud: float, provider: SatellitePro
         save_history_job(job_id, created, q.raw_text, q.model_dump(mode="json"), aoi, "completed", result)
 
         total_dur = time.time() - start_time
-        s1 = _format_duration(max(1.0, total_dur * 0.35))
-        s2 = _format_duration(max(1.5, total_dur * 0.65))
-        s3 = _format_duration(max(2.0, total_dur * 0.88))
-        s4 = _format_duration(max(2.5, total_dur))
+        # Only the total runtime is measured. Per-stage timings are not instrumented,
+        # so they are omitted rather than estimated from fractions of total_dur.
+        elapsed = _format_duration(total_dur)
 
-        # Extract real scene/tile metadata
-        scenes = result.get("evidence", {}).get("scenes", [])
-        tile_str = "T41PFT"
-        date_str = "18 Oct 2025"
-        if scenes and isinstance(scenes, list) and len(scenes) > 0:
-            sc0 = scenes[0]
-            if isinstance(sc0, dict):
-                item_id = sc0.get("item_id", "")
-                dt_val = sc0.get("datetime", "")
-                if dt_val:
-                    try:
-                        date_str = datetime.fromisoformat(dt_val.replace("Z", "+00:00")).strftime("%d %b %Y")
-                    except Exception:
-                        date_str = str(dt_val)[:10]
-                match = re.search(r"_(T\d{2}[A-Z]{3})_", item_id)
-                if match:
-                    tile_str = match.group(1)
-                elif item_id:
-                    tile_str = item_id[:12]
+        # Tile and acquisition date come from the scene evidence actually used.
+        tile_str, date_str = _scene_metadata(result)
 
         with _lock:
             if arrays is not None and raster is not None:
@@ -714,10 +743,10 @@ def _execute(job_id: str, q, aoi: dict, max_cloud: float, provider: SatellitePro
                 result=result,
                 finished=_now(),
                 stages=[
-                    {"name": "Data Fetching (Sentinel-2)", "status": "completed", "duration": s1},
-                    {"name": "Preprocessing", "status": "completed", "duration": s2},
-                    {"name": "Analysis", "status": "completed", "duration": s3},
-                    {"name": "Results Ready", "status": "completed", "duration": s4},
+                    {"name": "Data Fetching (Sentinel-2)", "status": "completed"},
+                    {"name": "Preprocessing", "status": "completed"},
+                    {"name": "Analysis", "status": "completed"},
+                    {"name": "Results Ready", "status": "completed", "duration": elapsed},
                 ],
                 provider_info={"name": "Sentinel-2", "tile": tile_str, "date": date_str},
             )
@@ -771,7 +800,10 @@ def analysis_run(req: RunRequest, bg: BackgroundTasks, provider: SatelliteProvid
                 {"name": "Analysis", "status": "queued"},
                 {"name": "Results Ready", "status": "queued"},
             ],
-            "provider_info": {"name": "Sentinel-2", "tile": "T41PFT", "date": _now()[:10]},
+            # The imagery tile and acquisition date are unknown until the scenes are
+            # fetched, so they stay null here instead of guessing a placeholder.
+            "provider_info": {"name": "Sentinel-2", "tile": None, "date": None},
+
         }
     bg.add_task(_execute, job_id, q, req.aoi, req.max_cloud, provider)
     return {"status": "queued", "job_id": job_id}
