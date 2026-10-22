@@ -1,0 +1,210 @@
+{
+  "test_10class": {
+    "accuracy": 0.9874074074074074,
+    "macro_precision": 0.9877120872089877,
+    "macro_recall": 0.9865282569855349,
+    "macro_f1": 0.9870686027874667,
+    "per_class": {
+      "AnnualCrop": {
+        "precision": 0.9735537190082645,
+        "recall": 0.988255033557047,
+        "f1": 0.980849292256453,
+        "support": 596
+      },
+      "Forest": {
+        "precision": 0.9853896103896104,
+        "recall": 0.9983552631578947,
+        "f1": 0.991830065359477,
+        "support": 608
+      },
+      "HerbaceousVegetation": {
+        "precision": 0.9690721649484536,
+        "recall": 0.9842931937172775,
+        "f1": 0.9766233766233767,
+        "support": 573
+      },
+      "Highway": {
+        "precision": 0.9859719438877755,
+        "recall": 0.9919354838709677,
+        "f1": 0.9889447236180905,
+        "support": 496
+      },
+      "Industrial": {
+        "precision": 1.0,
+        "recall": 0.9920159680638723,
+        "f1": 0.9959919839679359,
+        "support": 501
+      },
+      "Pasture": {
+        "precision": 0.9870466321243523,
+        "recall": 0.9621212121212122,
+        "f1": 0.9744245524296675,
+        "support": 396
+      },
+      "PermanentCrop": {
+        "precision": 0.9923664122137404,
+        "recall": 0.966542750929368,
+        "f1": 0.9792843691148775,
+        "support": 538
+      },
+      "Residential": {
+        "precision": 0.9945945945945946,
+        "recall": 0.9963898916967509,
+        "f1": 0.9954914337240758,
+        "support": 554
+      },
+      "River": {
+        "precision": 0.9924098671726755,
+        "recall": 0.9886578449905482,
+        "f1": 0.990530303030303,
+        "support": 529
+      },
+      "SeaLake": {
+        "precision": 0.9967159277504105,
+        "recall": 0.9967159277504105,
+        "f1": 0.9967159277504105,
+        "support": 609
+      }
+    }
+  },
+  "test_product_4class": {
+    "accuracy": 0.9927777777777778,
+    "macro_precision": 0.9924216180690726,
+    "macro_recall": 0.9930731563359008,
+    "macro_f1": 0.9927285931711739,
+    "per_class": {
+      "vegetation": {
+        "precision": 0.9799666110183639,
+        "recall": 0.9940728196443692,
+        "f1": 0.9869693148381673,
+        "support": 1181
+      },
+      "agricultural_land": {
+        "precision": 0.994059405940594,
+        "recall": 0.984313725490196,
+        "f1": 0.9891625615763546,
+        "support": 1530
+      },
+      "built_up": {
+        "precision": 0.9974210186976145,
+        "recall": 0.9974210186976145,
+        "f1": 0.9974210186976145,
+        "support": 1551
+      },
+      "water": {
+        "precision": 0.9982394366197183,
+        "recall": 0.9964850615114236,
+        "f1": 0.9973614775725593,
+        "support": 1138
+      }
+    }
+  },
+  "ece": 0.0032393736640611735,
+  "reliability": [
+    {
+      "lo": 0.0,
+      "hi": 0.1,
+      "count": 0,
+      "mean_confidence": null,
+      "accuracy": null
+    },
+    {
+      "lo": 0.1,
+      "hi": 0.2,
+      "count": 0,
+      "mean_confidence": null,
+      "accuracy": null
+    },
+    {
+      "lo": 0.2,
+      "hi": 0.30000000000000004,
+      "count": 0,
+      "mean_confidence": null,
+      "accuracy": null
+    },
+    {
+      "lo": 0.30000000000000004,
+      "hi": 0.4,
+      "count": 0,
+      "mean_confidence": null,
+      "accuracy": null
+    },
+    {
+      "lo": 0.4,
+      "hi": 0.5,
+      "count": 4,
+      "mean_confidence": 0.47333356738090515,
+      "accuracy": 0.5
+    },
+    {
+      "lo": 0.5,
+      "hi": 0.6000000000000001,
+      "count": 27,
+      "mean_confidence": 0.5451893983063875,
+      "accuracy": 0.7407407407407407
+    },
+    {
+      "lo": 0.6000000000000001,
+      "hi": 0.7000000000000001,
+      "count": 29,
+      "mean_confidence": 0.6470975526447954,
+      "accuracy": 0.6206896551724138
+    },
+    {
+      "lo": 0.7000000000000001,
+      "hi": 0.8,
+      "count": 50,
+      "mean_confidence": 0.7533354163169861,
+      "accuracy": 0.64
+    },
+    {
+      "lo": 0.8,
+      "hi": 0.9,
+      "count": 71,
+      "mean_confidence": 0.8574323998370641,
+      "accuracy": 0.8591549295774648
+    },
+    {
+      "lo": 0.9,
+      "hi": 1.0,
+      "count": 5219,
+      "mean_confidence": 0.9972314938408909,
+      "accuracy": 0.9961678482467906
+    }
+  ],
+  "mean_confidence": 0.9886063933372498,
+  "robustness": {
+    "none": {
+      "accuracy": 0.9874074074074074,
+      "mean_confidence": 0.9886063933372498
+    },
+    "scale x0.95": {
+      "accuracy": 0.9859259259259259,
+      "mean_confidence": 0.9882311820983887
+    },
+    "scale x1.05": {
+      "accuracy": 0.9864814814814815,
+      "mean_confidence": 0.9884239435195923
+    },
+    "offset +0.01 (all bands)": {
+      "accuracy": 0.9857407407407407,
+      "mean_confidence": 0.9880051016807556
+    },
+    "offset -0.01 (all bands)": {
+      "accuracy": 0.9851851851851852,
+      "mean_confidence": 0.988386332988739
+    },
+    "random per-band offset +/-0.02": {
+      "accuracy": 0.9851851851851852,
+      "mean_confidence": 0.9862817525863647
+    },
+    "gaussian noise sd=0.005": {
+      "accuracy": 0.9861111111111112,
+      "mean_confidence": 0.9877998232841492
+    },
+    "gaussian noise sd=0.01": {
+      "accuracy": 0.96,
+      "mean_confidence": 0.9709481596946716
+    }
+  }
+}

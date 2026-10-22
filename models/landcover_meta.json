@@ -1,0 +1,167 @@
+{
+  "architecture": "resnet18 (conv1 adapted to 5 channels, maxpool removed, fc=10)",
+  "bands_sentinel2": [
+    "B02",
+    "B03",
+    "B04",
+    "B08",
+    "B11"
+  ],
+  "bands_logical": [
+    "blue",
+    "green",
+    "red",
+    "nir",
+    "swir1"
+  ],
+  "scale": 10000.0,
+  "mean": [
+    0.1118243999698589,
+    0.10429298397841445,
+    0.0947626203444728,
+    0.22968260832820653,
+    0.18190102785761408
+  ],
+  "std": [
+    0.03330077825306531,
+    0.03950924911303811,
+    0.0593750555550052,
+    0.11179817077328114,
+    0.10025876830107838
+  ],
+  "tile_size": 64,
+  "eurosat_classes": [
+    "AnnualCrop",
+    "Forest",
+    "HerbaceousVegetation",
+    "Highway",
+    "Industrial",
+    "Pasture",
+    "PermanentCrop",
+    "Residential",
+    "River",
+    "SeaLake"
+  ],
+  "product_map": {
+    "AnnualCrop": "agricultural_land",
+    "PermanentCrop": "agricultural_land",
+    "Pasture": "agricultural_land",
+    "Forest": "vegetation",
+    "HerbaceousVegetation": "vegetation",
+    "Highway": "built_up",
+    "Industrial": "built_up",
+    "Residential": "built_up",
+    "River": "water",
+    "SeaLake": "water"
+  },
+  "product_classes": [
+    "vegetation",
+    "agricultural_land",
+    "built_up",
+    "water"
+  ],
+  "training": {
+    "seed": 42,
+    "epochs": 15,
+    "best_epoch": 12,
+    "batch": 128,
+    "lr": 0.001,
+    "optimizer": "AdamW",
+    "scheduler": "OneCycleLR",
+    "augmentation": "flips + rot90 + robustness (scale +/-5%, per-band offset +/-0.01, noise sd 0.005)",
+    "pretrained": "ImageNet1K_V1",
+    "split_sizes": [
+      16200,
+      5400,
+      5400
+    ],
+    "history": [
+      {
+        "epoch": 1,
+        "train_loss": 0.5396085994111167,
+        "val_acc": 0.9475925925925925
+      },
+      {
+        "epoch": 2,
+        "train_loss": 0.16529845659221923,
+        "val_acc": 0.9268518518518518
+      },
+      {
+        "epoch": 3,
+        "train_loss": 0.17630614307782952,
+        "val_acc": 0.9418518518518518
+      },
+      {
+        "epoch": 4,
+        "train_loss": 0.1664146844238516,
+        "val_acc": 0.9483333333333334
+      },
+      {
+        "epoch": 5,
+        "train_loss": 0.14462410986778282,
+        "val_acc": 0.9592592592592593
+      },
+      {
+        "epoch": 6,
+        "train_loss": 0.11142295761595643,
+        "val_acc": 0.9568518518518518
+      },
+      {
+        "epoch": 7,
+        "train_loss": 0.10228901388981039,
+        "val_acc": 0.9633333333333334
+      },
+      {
+        "epoch": 8,
+        "train_loss": 0.08439316179987694,
+        "val_acc": 0.97
+      },
+      {
+        "epoch": 9,
+        "train_loss": 0.06977778876436845,
+        "val_acc": 0.9774074074074074
+      },
+      {
+        "epoch": 10,
+        "train_loss": 0.06072302680787823,
+        "val_acc": 0.9816666666666667
+      },
+      {
+        "epoch": 11,
+        "train_loss": 0.04356107561449919,
+        "val_acc": 0.9792592592592593
+      },
+      {
+        "epoch": 12,
+        "train_loss": 0.034338615952976166,
+        "val_acc": 0.9861111111111112
+      },
+      {
+        "epoch": 13,
+        "train_loss": 0.02425650804347935,
+        "val_acc": 0.9857407407407407
+      },
+      {
+        "epoch": 14,
+        "train_loss": 0.020853803677868748,
+        "val_acc": 0.9855555555555555
+      },
+      {
+        "epoch": 15,
+        "train_loss": 0.02058261264825151,
+        "val_acc": 0.9861111111111112
+      }
+    ]
+  },
+  "data": {
+    "source": "EuroSAT multispectral via torchgeo (official splits)",
+    "processing_level": "L1C (TOA)"
+  },
+  "versions": {
+    "torch": "2.11.0+cu130",
+    "torchvision": "0.26.0+cu130",
+    "torchgeo": "0.10.1",
+    "python": "3.13.15"
+  },
+  "created_utc": "2026-10-18T14:03:55.754797Z"
+}

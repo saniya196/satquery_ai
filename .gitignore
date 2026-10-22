@@ -1,0 +1,75 @@
+# ============================================================
+# SatQuery AI - root ignore rules
+# frontend/.gitignore remains in force for frontend/ paths.
+# ============================================================
+
+# ---- Python caches and bytecode ----
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ---- Test and type-checker artifacts ----
+.pytest_cache/
+.pytest-tmp/
+pytest-basetemp-*/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# ---- Packaging ----
+*.egg-info/
+.eggs/
+
+# ---- Virtual environments ----
+.venv/
+venv/
+
+# ---- Local environment files and secrets ----
+.env
+.env.*
+!.env.example
+
+# ---- Node dependencies ----
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- Runtime data, caches and databases ----
+.cache/
+backend/.data/
+*.db
+*.sqlite
+*.sqlite3
+
+# ---- Generated build output ----
+# Also ignored by frontend/.gitignore; repeated here so it survives that file changing.
+frontend/dist/
+
+# ---- Model weights ----
+# Training checkpoints are never loaded by the application.
+*.pt
+*.pth
+# NumPy exports are ignored by default; these two are required at runtime.
+*.npz
+!models/landcover_resnet18.npz
+!models/reference_logits.npz
+
+# ---- Regenerable baseline comparison artifacts (~45 MB) ----
+models_baseline/
+
+# ---- Editor, OS and tooling directories ----
+.vscode/
+.idea/
+.kilo/
+.kilocode/
+.DS_Store
+Thumbs.db
+
+# ---- Logs and misc ----
+*.log
+*.local
+*.clean
