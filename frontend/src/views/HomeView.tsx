@@ -1,5 +1,5 @@
 import React from 'react'
-import type { HistorySummary } from '../types/analysis'
+import type { HistorySummary, JobStatus } from '../types/analysis'
 import type { NavView } from '../components/layout/Sidebar'
 
 interface HomeViewProps {
@@ -9,29 +9,65 @@ interface HomeViewProps {
   loadingHistory: boolean
 }
 
+const RECENT_QUERY_LIMIT = 5
+
+const STATUS_LABELS: Record<JobStatus, string> = {
+  completed: 'Completed',
+  failed: 'Failed',
+  processing: 'Processing',
+  queued: 'Queued',
+}
+
+/** Makes an element with role="button" operable from the keyboard, as the ARIA pattern requires. */
+function activateWithKeyboard(action: () => void) {
+  return (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      action()
+    }
+  }
+}
+
+function formatTimestamp(created: string | undefined): string {
+  if (!created) return ''
+  const parsed = new Date(created)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return parsed.toLocaleString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 export const HomeView: React.FC<HomeViewProps> = ({
   onNavigate,
   recentQueries,
   onOpenQuery,
   loadingHistory,
 }) => {
+  const recent = recentQueries.slice(0, RECENT_QUERY_LIMIT)
+
   return (
     <div className="home-dashboard-container">
-      {/* Welcome Card matching Reference Panel 1 */}
-      <section className="welcome-section-card">
-        <div className="welcome-header">
-          <h2>Welcome to SatQuery AI</h2>
-          <p>Analyze satellite imagery, ask questions in natural language, and get accurate, verifiable insights.</p>
+      {/* The page title and subtitle live in the top bar; this section is the only
+          entry point into analysis, with one card per imagery source. */}
+      <section className="home-entry-section">
+        <div className="home-section-heading">
+          <h2>Start an analysis</h2>
+          <p>Choose how to supply imagery, then ask your question in plain language.</p>
         </div>
 
         <div className="mode-entry-grid">
           <div
             className="mode-entry-card map-entry"
-            onClick={() => onNavigate('map')}
             role="button"
             tabIndex={0}
+            onClick={() => onNavigate('map')}
+            onKeyDown={activateWithKeyboard(() => onNavigate('map'))}
           >
-            <div className="mode-card-icon map-icon-bg">
+            <div className="mode-card-icon map-icon-bg" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21" />
                 <line x1="9" y1="3" x2="9" y2="18" />
@@ -40,18 +76,19 @@ export const HomeView: React.FC<HomeViewProps> = ({
             </div>
             <div className="mode-card-content">
               <h3>Map Mode</h3>
-              <p>Draw an area on the map and ask a question</p>
+              <p>Draw an area of interest and query Sentinel-2 L2A imagery</p>
             </div>
-            <span className="mode-card-arrow">→</span>
+            <span className="mode-card-arrow" aria-hidden="true">→</span>
           </div>
 
           <div
             className="mode-entry-card upload-entry"
-            onClick={() => onNavigate('upload')}
             role="button"
             tabIndex={0}
+            onClick={() => onNavigate('upload')}
+            onKeyDown={activateWithKeyboard(() => onNavigate('upload'))}
           >
-            <div className="mode-card-icon upload-icon-bg">
+            <div className="mode-card-icon upload-icon-bg" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                 <polyline points="17 8 12 3 7 8" />
@@ -60,143 +97,75 @@ export const HomeView: React.FC<HomeViewProps> = ({
             </div>
             <div className="mode-card-content">
               <h3>Upload Mode</h3>
-              <p>Upload GeoTIFF files for analysis</p>
+              <p>Run the same verified pipeline on your own GeoTIFF</p>
             </div>
-            <span className="mode-card-arrow">→</span>
+            <span className="mode-card-arrow" aria-hidden="true">→</span>
           </div>
         </div>
       </section>
 
-      {/* Feature Pillars Banner */}
-      <section className="feature-pillars-grid">
+      {/* Quiet capability strip: no second set of entry cards, just links onward. */}
+      <section className="home-capability-strip" aria-label="Platform capabilities">
         <div
-          className="feature-pillar-card clickable-pillar"
-          onClick={() => onNavigate('map')}
+          className="capability-item"
           role="button"
           tabIndex={0}
-        >
-          <div className="pillar-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-              <circle cx="12" cy="10" r="3" />
-            </svg>
-          </div>
-          <div className="pillar-text">
-            <strong>Map Mode</strong>
-            <span>Draw area & ask in plain language</span>
-          </div>
-        </div>
-
-        <div
-          className="feature-pillar-card clickable-pillar"
-          onClick={() => onNavigate('upload')}
-          role="button"
-          tabIndex={0}
-        >
-          <div className="pillar-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" />
-              <path d="M12 12v9" />
-              <path d="m16 16-4-4-4 4" />
-            </svg>
-          </div>
-          <div className="pillar-text">
-            <strong>Upload Mode</strong>
-            <span>Upload GeoTIFFs for analysis</span>
-          </div>
-        </div>
-
-        <div
-          className="feature-pillar-card clickable-pillar"
           onClick={() => onNavigate('multisensor')}
-          role="button"
-          tabIndex={0}
+          onKeyDown={activateWithKeyboard(() => onNavigate('multisensor'))}
         >
-          <div className="pillar-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" />
-              <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
-              <path d="M2 12h20" />
-            </svg>
-          </div>
-          <div className="pillar-text">
-            <strong>Multi-sensor</strong>
-            <span>Sentinel-2 analytics; SAR fusion unavailable</span>
-          </div>
+          <span className="capability-label">Multi-sensor</span>
+          <span className="capability-detail">Sentinel-2 analytics; Sentinel-1 SAR fusion is not yet available</span>
         </div>
-
         <div
-          className="feature-pillar-card clickable-pillar"
-          onClick={() => onNavigate('benchmarks')}
+          className="capability-item"
           role="button"
           tabIndex={0}
+          onClick={() => onNavigate('benchmarks')}
+          onKeyDown={activateWithKeyboard(() => onNavigate('benchmarks'))}
         >
-          <div className="pillar-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-            </svg>
-          </div>
-          <div className="pillar-text">
-            <strong>Verified Results</strong>
-            <span>Evidence, confidence & execution trace</span>
-          </div>
+          <span className="capability-label">Verified results</span>
+          <span className="capability-detail">Evidence, confidence and execution trace on every analysis</span>
         </div>
       </section>
 
-      {/* Recent Queries matching Reference Panel 1 */}
-      <section className="recent-queries-card">
+      <section className="recent-queries-card" aria-label="Recent queries">
         <div className="recent-queries-header">
-          <h3>Recent Queries</h3>
-          <button
-            type="button"
-            className="view-all-link"
-            onClick={() => onNavigate('history')}
-          >
-            View all history →
+          <h3>Recent queries</h3>
+          <button type="button" className="view-all-link" onClick={() => onNavigate('history')}>
+            View all →
           </button>
         </div>
 
         {loadingHistory ? (
           <div className="recent-queries-loading">
-            <span className="spinner-dot" />
+            <span className="home-loading-dot" aria-hidden="true" />
             <span>Loading recent activity…</span>
           </div>
-        ) : recentQueries.length === 0 ? (
+        ) : recent.length === 0 ? (
           <div className="recent-queries-empty">
-            <p>No recent analysis queries yet. Draw an area on the map or upload a GeoTIFF to begin.</p>
-            <button
-              type="button"
-              className="start-query-button"
-              onClick={() => onNavigate('map')}
-            >
-              Start First Analysis
-            </button>
+            <p>No analyses yet. Use Map Mode or Upload Mode above to run your first query.</p>
           </div>
         ) : (
           <div className="recent-queries-list">
-            {recentQueries.slice(0, 6).map((item) => (
+            {recent.map((item) => (
               <div
                 key={item.id}
                 className="recent-query-row"
-                onClick={() => onOpenQuery(item.id)}
                 role="button"
                 tabIndex={0}
+                title={item.query || undefined}
+                onClick={() => onOpenQuery(item.id)}
+                onKeyDown={activateWithKeyboard(() => onOpenQuery(item.id))}
               >
                 <div className="query-row-main">
-                  <span className="query-row-text">{item.query || `Analysis (${item.operation || 'Index'})`}</span>
-                  <span className="query-row-date">
-                    {item.created ? new Date(item.created).toLocaleString(undefined, {
-                      day: 'numeric',
-                      month: 'short',
-                      year: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    }) : ''}
+                  <span className="query-row-text">
+                    {item.query || `Analysis (${item.operation || 'Index'})`}
                   </span>
+                  <span className="query-row-date">{formatTimestamp(item.created)}</span>
                 </div>
                 <div className="query-row-status">
                   <span className={`status-badge-pill status-${item.status}`}>
-                    {item.status === 'completed' ? 'Completed' : item.status}
+                    {STATUS_LABELS[item.status] ?? item.status}
                   </span>
                 </div>
               </div>
