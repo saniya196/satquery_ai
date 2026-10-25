@@ -334,16 +334,53 @@ export const UploadView: React.FC = () => {
       </div>
 
       <form className="upload-change-form" onSubmit={handleChangeAnalysis}>
-        <h3>Compare two dated rasters</h3>
-        <p>Compares raw pixel values as after minus before. This is not automatically NDVI or a semantic land-cover change.</p>
-        <label>Before raster <input type="file" accept=".tif,.tiff" required onChange={(event) => setBeforeFile(event.target.files?.[0] ?? null)} /></label>
-        <label>Before date <input type="date" required value={beforeDate} onChange={(event) => setBeforeDate(event.target.value)} /></label>
-        <label>Before band <input type="number" min="1" required value={beforeBand} onChange={(event) => setBeforeBand(event.target.value)} /></label>
-        <label>After raster <input type="file" accept=".tif,.tiff" required onChange={(event) => setAfterFile(event.target.files?.[0] ?? null)} /></label>
-        <label>After date <input type="date" required value={afterDate} onChange={(event) => setAfterDate(event.target.value)} /></label>
-        <label>After band <input type="number" min="1" required value={afterBand} onChange={(event) => setAfterBand(event.target.value)} /></label>
-        <button type="submit" disabled={comparing || !beforeFile || !afterFile}>{comparing ? 'Comparing rasters…' : 'Compare rasters'}</button>
-        {changeError && <p role="alert">{changeError}</p>}
+        <div className="upload-section-intro">
+          <h3>Compare two dated rasters</h3>
+          <p>Compares raw pixel values as after minus before. This is not automatically NDVI or a semantic land-cover change.</p>
+        </div>
+
+        <div className="compare-sections">
+          <fieldset className="compare-raster-group">
+            <legend>Before raster</legend>
+            <label className="upload-field">
+              <span>GeoTIFF file</span>
+              <input type="file" accept=".tif,.tiff" required onChange={(event) => setBeforeFile(event.target.files?.[0] ?? null)} />
+            </label>
+            <div className="compare-raster-meta">
+              <label className="upload-field">
+                <span>Date</span>
+                <input type="date" required value={beforeDate} onChange={(event) => setBeforeDate(event.target.value)} />
+              </label>
+              <label className="upload-field">
+                <span>Band number</span>
+                <input type="number" min="1" required value={beforeBand} onChange={(event) => setBeforeBand(event.target.value)} />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset className="compare-raster-group">
+            <legend>After raster</legend>
+            <label className="upload-field">
+              <span>GeoTIFF file</span>
+              <input type="file" accept=".tif,.tiff" required onChange={(event) => setAfterFile(event.target.files?.[0] ?? null)} />
+            </label>
+            <div className="compare-raster-meta">
+              <label className="upload-field">
+                <span>Date</span>
+                <input type="date" required value={afterDate} onChange={(event) => setAfterDate(event.target.value)} />
+              </label>
+              <label className="upload-field">
+                <span>Band number</span>
+                <input type="number" min="1" required value={afterBand} onChange={(event) => setAfterBand(event.target.value)} />
+              </label>
+            </div>
+          </fieldset>
+        </div>
+
+        <div className="upload-form-actions">
+          <button className="upload-primary-btn" type="submit" disabled={comparing || !beforeFile || !afterFile}>{comparing ? 'Comparing rasters…' : 'Compare rasters'}</button>
+        </div>
+        {changeError && <p className="upload-form-error" role="alert">{changeError}</p>}
         {changeResult && <div className="upload-change-result" role="status">
           <h4>Raw raster comparison</h4>
           <p>{changeResult.before_date} → {changeResult.after_date}; formula: {changeResult.evidence.formula}</p>
@@ -470,8 +507,8 @@ export const UploadView: React.FC = () => {
                   </label>
                 ))}
               </div>
-              <button type="submit" disabled={uploading}>Calculate region statistics</button>
-              {regionError && <p role="alert">{regionError}</p>}
+              <button className="upload-primary-btn" type="submit" disabled={uploading}>Calculate region statistics</button>
+              {regionError && <p className="upload-form-error" role="alert">{regionError}</p>}
             </form>
           )
         })()}
@@ -510,8 +547,8 @@ export const UploadView: React.FC = () => {
                   </label>
                 ))}
               </div>
-              <button type="submit" disabled={classifyingLandCover}>{classifyingLandCover ? 'Classifying raster…' : 'Classify uploaded raster'}</button>
-              {landCoverError && <p role="alert">{landCoverErrorKind === 'unsupported' ? 'Unsupported input: ' : landCoverErrorKind === 'validation' ? 'Validation error: ' : 'Server error: '}{landCoverError}</p>}
+              <button className="upload-primary-btn" type="submit" disabled={classifyingLandCover}>{classifyingLandCover ? 'Classifying raster…' : 'Classify uploaded raster'}</button>
+              {landCoverError && <p className="upload-form-error" role="alert">{landCoverErrorKind === 'unsupported' ? 'Unsupported input: ' : landCoverErrorKind === 'validation' ? 'Validation error: ' : 'Server error: '}{landCoverError}</p>}
             </form>
           )
         })()}

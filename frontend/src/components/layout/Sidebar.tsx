@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useRef } from 'react'
 
 export type NavView = 'home' | 'map' | 'multisensor' | 'change' | 'upload' | 'history' | 'benchmarks' | 'settings'
 
@@ -6,13 +6,26 @@ interface SidebarProps {
   currentView: NavView
   onSelectView: (view: NavView) => void
   activeJobCount?: number
+  open?: boolean
+  onClose?: () => void
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   currentView,
   onSelectView,
   activeJobCount = 0,
+  open = false,
+  onClose,
 }) => {
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null)
+
+  // Only rendered as a drawer on narrow viewports; move focus into it once open.
+  useEffect(() => {
+    if (!open) return
+    const frame = requestAnimationFrame(() => closeButtonRef.current?.focus())
+    return () => cancelAnimationFrame(frame)
+  }, [open])
+
   const navItems: { id: NavView; label: string; icon: React.ReactNode }[] = [
     {
       id: 'home',
@@ -100,7 +113,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ]
 
   return (
-    <aside className="nav-sidebar" aria-label="Main Navigation">
+    <aside
+      id="app-navigation"
+      className={`nav-sidebar${open ? ' nav-sidebar-open' : ''}`}
+      aria-label="Main Navigation"
+    >
+      <button
+        ref={closeButtonRef}
+        type="button"
+        className="nav-drawer-close"
+        onClick={onClose}
+        aria-label="Close navigation menu"
+      >
+        <span aria-hidden="true">✕</span>
+      </button>
+
       <div className="nav-sidebar-brand" onClick={() => onSelectView('home')} role="button" tabIndex={0}>
         <div className="nav-brand-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

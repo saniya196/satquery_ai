@@ -60,11 +60,19 @@ export default function App() {
   const [compareMonthA, setCompareMonthA] = useState('June')
   const [compareMonthB, setCompareMonthB] = useState('September')
   const [panelCollapsed, setPanelCollapsed] = useState(false)
+  const [navOpen, setNavOpen] = useState(false)
 
   // Mirrors of the latest query and AOI so the job poller can read them without
   // being torn down and restarted on every keystroke or redraw.
   const queryRef = useRef(query)
   const aoiRef = useRef(aoi)
+  const navButtonRef = useRef<HTMLButtonElement | null>(null)
+  const navWasOpenRef = useRef(false)
+
+  function navigateTo(view: NavView) {
+    setCurrentView(view)
+    setNavOpen(false)
+  }
 
   function showRequestError(error: unknown) {
     const friendly = friendlyApiError(error)
@@ -93,6 +101,33 @@ export default function App() {
     queryRef.current = query
     aoiRef.current = aoi
   }, [query, aoi])
+
+  // The drawer only exists below the shell breakpoint; close it if the window grows.
+  useEffect(() => {
+    const narrow = window.matchMedia('(max-width: 720px)')
+    const handleChange = () => {
+      if (!narrow.matches) setNavOpen(false)
+    }
+    narrow.addEventListener('change', handleChange)
+    return () => narrow.removeEventListener('change', handleChange)
+  }, [])
+
+  // Escape closes the drawer; focus then returns to the toggle that opened it.
+  useEffect(() => {
+    if (!navOpen) {
+      if (navWasOpenRef.current) {
+        navWasOpenRef.current = false
+        navButtonRef.current?.focus()
+      }
+      return
+    }
+    navWasOpenRef.current = true
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNavOpen(false)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [navOpen])
 
   useEffect(() => {
     if (!activeJobId) return
@@ -294,21 +329,28 @@ export default function App() {
     <div className="satquery-app-container">
       <Sidebar
         currentView={currentView}
-        onSelectView={setCurrentView}
+        onSelectView={navigateTo}
         activeJobCount={activeJobId ? 1 : 0}
+        open={navOpen}
+        onClose={() => setNavOpen(false)}
       />
+
+      {navOpen && <div className="nav-backdrop" aria-hidden="true" onClick={() => setNavOpen(false)} />}
 
       <div className="app-main-content-layout">
         <AppHeader
           currentView={currentView}
           activeJobId={activeJobId}
           jobStatus={job?.status}
+          navOpen={navOpen}
+          onToggleNav={() => setNavOpen((value) => !value)}
+          menuButtonRef={navButtonRef}
         />
 
-        <div className="app-view-body">
+        <div className="app-view-body" inert={navOpen}>
           {currentView === 'home' && (
             <HomeView
-              onNavigate={setCurrentView}
+              onNavigate={navigateTo}
               recentQueries={historyItems}
               onOpenQuery={(id) => {
                 void openHistory(id)
@@ -360,6 +402,7 @@ export default function App() {
                 aoi={aoi}
                 aoiA={aoiA}
                 aoiB={aoiB}
+                active={currentView === 'map'}
                 compareMode={compareMode}
                 drawTarget={drawTarget}
                 jobId={activeRecord?.status === 'completed' ? activeRecord.id : null}

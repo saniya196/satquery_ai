@@ -12,6 +12,8 @@ interface MapWorkspaceProps {
   aoi: PolygonGeometry | null
   aoiA: PolygonGeometry | null
   aoiB: PolygonGeometry | null
+  /** True while the map view is the visible view; the map stays mounted when hidden. */
+  active: boolean
   compareMode: boolean
   drawTarget: DrawTarget | null
   jobId: string | null
@@ -104,7 +106,6 @@ export function MapWorkspace(props: MapWorkspaceProps) {
   const [layerError, setLayerError] = useState<string | null>(null)
   const [visibleLayers, setVisibleLayers] = useState<string[]>([])
   const [opacity, setOpacity] = useState(0.72)
-  const [labelsVisible, setLabelsVisible] = useState(true)
   const [cursorPosition, setCursorPosition] = useState<CursorPosition | null>(null)
   const [zoomLevel, setZoomLevel] = useState(5)
   const [coordinateText, setCoordinateText] = useState('')
@@ -165,10 +166,8 @@ export function MapWorkspace(props: MapWorkspaceProps) {
     map.on('zoomend', () => setZoomLevel(map.getZoom()))
     map.on('baselayerchange', (event: any) => {
       if (event.name === 'Satellite + labels') {
-        setLabelsVisible(true)
         if (!map.hasLayer(labels)) labels.addTo(map)
       } else if (event.name === 'Satellite only' || event.name === 'Streets') {
-        setLabelsVisible(false)
         if (map.hasLayer(labels)) map.removeLayer(labels)
       }
     })
@@ -197,6 +196,16 @@ export function MapWorkspace(props: MapWorkspaceProps) {
       handleRef.current = null
     }
   }, [])
+
+  // Leaflet is initialised while the view is hidden, so it measures a zero-size
+  // container. One recalculation per activation keeps the tiles and vectors aligned.
+  useEffect(() => {
+    if (!props.active) return
+    const frame = window.requestAnimationFrame(() => {
+      handleRef.current?.map.invalidateSize()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [props.active])
 
   useEffect(() => {
     const handle = handleRef.current
@@ -490,6 +499,7 @@ export function MapWorkspace(props: MapWorkspaceProps) {
             <input aria-label="Latitude and longitude" value={coordinateText} onChange={(event) => setCoordinateText(event.target.value)} placeholder="lat, lon" />
             <button type="submit" title="Go to coordinates">Go</button>
           </form>
+          <button className="map-action-icon" type="button" title={fullscreen ? 'Exit full screen map' : 'Full screen map'} aria-label={fullscreen ? 'Exit full screen map' : 'Full screen map'} onClick={() => void toggleFullscreen()}><Icon name="fullscreen" /></button>
         </div>
         {coordinateError && <p className="map-feedback map-feedback-error" role="alert">{coordinateError}</p>}
       </div>
@@ -508,18 +518,6 @@ export function MapWorkspace(props: MapWorkspaceProps) {
         <input ref={fileRef} type="file" accept=".geojson,.json,application/geo+json,application/json" className="visually-hidden" onChange={uploadAoi} />
       </div>
 
-      {!props.compareMode && <label className="labels-toggle" title="Show or hide place and road labels">
-        <input type="checkbox" checked={labelsVisible} onChange={(event) => {
-          setLabelsVisible(event.target.checked)
-          const labels = handleRef.current?.layers.labels
-          if (!labels || !handleRef.current) return
-          if (event.target.checked) labels.addTo(handleRef.current.map)
-          else handleRef.current.map.removeLayer(labels)
-        }} />
-        <span>Labels</span>
-      </label>}
-
-      <button className="fullscreen-button" type="button" title={fullscreen ? 'Exit full screen map' : 'Full screen map'} aria-label={fullscreen ? 'Exit full screen map' : 'Full screen map'} onClick={() => void toggleFullscreen()}><Icon name="fullscreen" /></button>
       {drawText && <div className="draw-instruction" role="status">{drawText}</div>}
       {uploadError && <div className="map-feedback map-feedback-error map-upload-error" role="alert">{uploadError}{uploadErrorDetails && <details><summary>Error details</summary><code>{uploadErrorDetails}</code></details>}</div>}
 
