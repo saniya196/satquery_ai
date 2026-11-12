@@ -4,7 +4,7 @@ WORKDIR /web
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./
-ARG VITE_API_URL=http://localhost:8000
+ARG VITE_API_URL=http://localhost:8001
 ENV VITE_API_URL=${VITE_API_URL}
 RUN npm run build
 

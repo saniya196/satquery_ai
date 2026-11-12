@@ -51,3 +51,53 @@ def test_llm_exception_falls_back():
     def boom(f, e):
         raise RuntimeError("api down")
     assert grounded_answer(FACTS, boom)["source"] == "template"
+
+
+def test_index_explanations_are_natural_and_grounded_for_all_supported_indices():
+    for index, meaning in {
+        "NDVI": "vegetation proxy", "NDWI": "water signal", "MNDWI": "modified spectral water",
+        "NDBI": "built-up surface signal", "SAVI": "soil-adjusted vegetation",
+    }.items():
+        facts = {
+            "operation": "index_stats", "index": index, "date": "2026-06-06",
+            "stats": {"mean": 0.29, "median": 0.25, "std": 0.12, "min": -0.1, "max": 0.7,
+                      "valid_fraction": 0.95},
+            "analysed_area_km2": 2.4, "coverage": {"fraction": 0.98},
+            "provenance": {"scene_ids": ["S2C_43QHU_20260606_0_L2A"], "provider": "Element84 Earth Search"},
+            "data_quality_score": 91.0,
+        }
+        answer = template_answer(facts)
+        assert meaning in answer
+        assert "does not establish a cause" in answer
+        assert "Element84 Earth Search" in answer and "S2C_43QHU_20260606_0_L2A" in answer
+        assert check_grounding(answer, facts)["valid"]
+
+
+def test_change_and_hotspot_explanation_uses_categories_and_grounded_provenance():
+    facts = {
+        **FACTS,
+        "analysed_area_km2": 0.78,
+        "hotspot_summary": {"count": 2},
+        "provenance": {"scene_ids": ["SCENE_A", "SCENE_B"], "provider": "Earth Search"},
+    }
+    answer = template_answer(facts)
+    assert "change map shows where" in answer
+    assert "2 spatial hotspot cluster(s)" in answer
+    assert "do not explain why" in answer
+    assert "SCENE_A, SCENE_B" in answer
+    assert check_grounding(answer, facts)["valid"]
+
+
+def test_temporal_trend_explanation_includes_dates_slope_and_caveat():
+    facts = {
+        "operation": "time_series", "index": "NDVI", "data_quality_score": 88.0,
+        "analysed_area_km2": 3.1, "sens_slope_per_year": -0.04,
+        "provenance": {"scene_ids": ["SCENE_1", "SCENE_2"], "provider": "Earth Search"},
+        "series": {"n": 8, "min": 0.2, "max": 0.6, "dates": ["2025-01-01", "2025-12-01"],
+                   "mean_valid_fraction_of_aoi_included": 0.9, "trend_claim_allowed": True,
+                   "trend_test": {"trend": "decreasing", "p_value": 0.03, "significant": True}},
+    }
+    answer = template_answer(facts)
+    assert "per-date AOI median NDVI" in answer
+    assert "seasonality and autocorrelation" in answer
+    assert check_grounding(answer, facts)["valid"]

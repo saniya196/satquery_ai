@@ -7,17 +7,23 @@ import re
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.classification.loader import get_classifier
-from app.core.errors import SatQueryError
+from app.core.errors import CaptionModelUnavailableError, SatQueryError
+from app.core.config import settings
 from app.satellite.geotiff import inspect_geotiff
 from app.llm.client import get_llm_client
 from app.llm.explainer import make_llm_fn
@@ -34,25 +40,92 @@ from app.rendering.layers import (
     encode_png,
     legend_for,
 )
-from app.satellite.provider import (EarthSearchProvider, SatelliteProvider, UploadedRasterError,
-                                    read_uploaded_raster, read_uploaded_raster_cube, read_uploaded_raster_region)
-from app.classification.labels import BANDS as LAND_COVER_BANDS
-from app.schemas.query import Operation
+from app.satellite.provider import (EarthSearchProvider, SatelliteProvider, Sentinel1Provider, UploadedRasterError,
+                                    PlanetaryComputerSentinel1Provider, read_uploaded_raster,
+                                    read_uploaded_raster_cube, read_uploaded_raster_region)
+from app.classification.labels import BANDS as LAND_COVER_BANDS, LOGICAL_BANDS as LAND_COVER_LOGICAL_BANDS
+from app.schemas.query import DateRange, Operation
 from app.services import analysis, land_cover
+from app.services.sar import summarize_rtc_scene
+from app.services.fusion import temporal_separation_hours, fuse
+from app.services.captioning import caption_scene
+from app.services.compare import run_compare_operation
 from app.storage.history import delete_history, get_history, list_history, save_history_job
+from app.storage import jobs as job_store
+from app.storage.artifacts import artifacts_dir, load_artifacts, save_artifacts
 from app.validation.grounding import check_grounding
+from app.investigation import run_investigation
 
 app = FastAPI(title="SatQuery AI", version="0.1.0",
               description="Natural-language satellite analytics. The LLM interprets; the engine computes.")
 
-_origins = [o.strip() for o in os.getenv("SATQUERY_CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["GET", "POST", "DELETE"], allow_headers=["*"])
+_default_cors_origins = "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174"
+_cors_origins = [o.strip() for o in os.getenv("SATQUERY_CORS_ORIGINS", _default_cors_origins).split(",") if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=_cors_origins, allow_methods=["GET", "POST", "DELETE"], allow_headers=["*"])
 
 _provider: Optional[SatelliteProvider] = None
+_sar_provider: Optional[Sentinel1Provider] = None
 _jobs: dict = {}
 _layer_store: dict = {}
 _MAX_LAYER_JOBS = 20
 _lock = threading.Lock()
+
+# Place search is proxied through the API because Nominatim does not send CORS
+# headers, so a browser cannot call it directly. The proxy also supplies the
+# required User-Agent and enforces Nominatim's one-request-per-second policy.
+_PLACE_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+_PLACE_SEARCH_USER_AGENT = "SatQueryAI/0.1 (local development)"
+_PLACE_SEARCH_CACHE_TTL_SECONDS = 300.0
+_PLACE_SEARCH_MIN_INTERVAL_SECONDS = 1.0
+_place_search_lock = threading.Lock()
+_place_search_cache: dict[tuple[str, int], tuple[float, list[dict[str, str]]]] = {}
+_last_place_search_at = 0.0
+
+
+def _nominatim_place_search(query: str, limit: int) -> list[dict[str, str]]:
+    params = urllib.parse.urlencode({"format": "jsonv2", "limit": str(limit), "q": query})
+    request = urllib.request.Request(
+        f"{_PLACE_SEARCH_URL}?{params}",
+        headers={"User-Agent": _PLACE_SEARCH_USER_AGENT, "Accept-Language": "en"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "place_search_unavailable",
+                "message": "Location search is temporarily unavailable. Try again, or choose the location on the map.",
+            },
+        ) from exc
+    if not isinstance(payload, list):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "place_search_unavailable",
+                "message": "Location search returned an unexpected response. Try again, or choose the location on the map.",
+            },
+        )
+    results: list[dict[str, str]] = []
+    for item in payload[:limit]:
+        if not isinstance(item, dict):
+            continue
+        display_name = item.get("display_name")
+        lat = item.get("lat")
+        lon = item.get("lon")
+        if isinstance(display_name, str) and display_name.strip() and lat is not None and lon is not None:
+            results.append({"display_name": display_name.strip(), "lat": str(lat), "lon": str(lon)})
+    return results
+
+
+@app.on_event("startup")
+def _on_startup():
+    try:
+        job_store.mark_interrupted_on_startup()
+    except Exception:
+        pass
+
 
 
 def get_provider() -> SatelliteProvider:
@@ -60,6 +133,13 @@ def get_provider() -> SatelliteProvider:
     if _provider is None:
         _provider = EarthSearchProvider()
     return _provider
+
+
+def get_sar_provider() -> Sentinel1Provider:
+    global _sar_provider
+    if _sar_provider is None:
+        _sar_provider = PlanetaryComputerSentinel1Provider()
+    return _sar_provider
 
 
 def clean(obj: Any) -> Any:
@@ -94,6 +174,21 @@ def _store_layer_data(job_id: str, arrays: dict, raster: dict, operation: Operat
         _layer_store.pop(next(iter(_layer_store)))
 
 
+def _persist_artifacts(job_id: str, arrays: dict, raster: dict, operation: Operation) -> None:
+    """Write array/raster outputs to the filesystem artifact store and record
+    the reference in the job row so completed results survive a restart."""
+    try:
+        ref = save_artifacts(job_id, arrays, raster, operation)
+        if ref is not None:
+            job_store.update_job(
+                job_id,
+                artifacts_ref={"job_id": job_id, "meta_path": str(artifacts_dir() / job_id / "meta.json")},
+            )
+    except Exception:
+        pass
+
+
+
 class AOIRequest(BaseModel):
     aoi: dict
 
@@ -113,6 +208,7 @@ class RunRequest(BaseModel):
     aoi: dict
     reference_date: Optional[date] = None
     max_cloud: float = Field(default=40.0, ge=0, le=100)
+    selected_scene_id: Optional[str] = Field(default=None, min_length=1, max_length=256)
 
 
 class CompareRequest(BaseModel):
@@ -123,8 +219,56 @@ class CompareRequest(BaseModel):
     max_cloud: float = Field(default=40.0, ge=0, le=100)
 
 
+class DateRangeOverride(BaseModel):
+    start: date
+    end: date
+
+
+class InvestigationRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    aoi: Optional[dict] = None
+    reference_date: Optional[date] = None
+    max_cloud: float = Field(default=40.0, ge=0, le=100)
+    date_a: Optional[DateRangeOverride] = None
+    date_b: Optional[DateRangeOverride] = None
+    series_range: Optional[DateRangeOverride] = None
+
+
 class ImageryScenesRequest(BaseModel):
     aoi: dict
+    start: date
+    end: date
+    max_cloud: float = Field(default=40.0, ge=0, le=100)
+
+
+class SarSceneSearchRequest(BaseModel):
+    aoi: dict
+    start: date
+    end: date
+
+
+class SarAnalysisRequest(BaseModel):
+    aoi: dict
+    selected_scene_id: str = Field(min_length=1, max_length=256)
+    start: date
+    end: date
+
+
+class FusionSceneSearchRequest(BaseModel):
+    aoi: dict
+    start: date
+    end: date
+    max_cloud: float = Field(default=40.0, ge=0, le=100)
+
+
+class FusionAnalysisRequest(FusionSceneSearchRequest):
+    optical_scene_id: str = Field(min_length=1, max_length=256)
+    sar_scene_id: str = Field(min_length=1, max_length=256)
+
+
+class CaptionAnalysisRequest(BaseModel):
+    aoi: dict
+    selected_scene_id: str = Field(min_length=1, max_length=256)
     start: date
     end: date
     max_cloud: float = Field(default=40.0, ge=0, le=100)
@@ -192,6 +336,97 @@ def _validate_aoi_size(aoi: dict):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/evaluation/land-cover")
+def land_cover_evaluation():
+    """Expose the checked-in EuroSAT metrics without claiming a local reevaluation."""
+    roots = (Path(__file__).resolve().parents[3], Path(__file__).resolve().parents[2])
+    metrics_path = next((root / "models" / "metrics.json" for root in roots
+                         if (root / "models" / "metrics.json").is_file()), None)
+    if metrics_path is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "evaluation_report_unavailable",
+                "message": "The checked-in land-cover evaluation report is not available in this deployment.",
+            },
+        )
+    try:
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "evaluation_report_unavailable",
+                "message": "The checked-in land-cover evaluation report could not be read.",
+            },
+        ) from exc
+
+    try:
+        ten_class = metrics["test_10class"]
+        four_class = metrics["test_product_4class"]
+        test_samples = sum(int(item["support"]) for item in ten_class["per_class"].values())
+        results = {
+            "accuracy_10_class": float(ten_class["accuracy"]),
+            "macro_f1_10_class": float(ten_class["macro_f1"]),
+            "accuracy_4_class": float(four_class["accuracy"]),
+            "macro_f1_4_class": float(four_class["macro_f1"]),
+            "expected_calibration_error": float(metrics["ece"]),
+            "accuracy_gaussian_noise_sd_0_01": float(metrics["robustness"]["gaussian noise sd=0.01"]["accuracy"]),
+        }
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "evaluation_report_invalid",
+                "message": "The checked-in land-cover evaluation report is incomplete or invalid.",
+            },
+        ) from exc
+
+    return {
+        "dataset": "EuroSAT",
+        "test_samples": test_samples,
+        "source": "models/metrics.json and models/MODEL_CARD.md",
+        "reported_artifact_only": True,
+        "reproduced_by_this_endpoint": False,
+        "results": results,
+        "limitations": [
+            "The checkpoint report describes a held-out EuroSAT test split; this endpoint does not rerun the evaluation.",
+            "The model was trained on Sentinel-2 L1C imagery and is applied to Sentinel-2 L2A, so domain shift is possible.",
+            "Accuracy on Indian landscapes is unmeasured; these dataset metrics are not accuracy estimates for an AOI.",
+            "The noise result is the reported test accuracy with Gaussian noise standard deviation 0.01 applied to the input bands.",
+            "Model softmax confidence is not ground-truth accuracy.",
+        ],
+    }
+
+
+@app.get("/places/search")
+def places_search(q: str, limit: int = 5):
+    global _last_place_search_at
+    query = q.strip()
+    if len(query) < 2:
+        return []
+    if len(query) > 200:
+        raise HTTPException(422, {"code": "place_query_too_long", "message": "Search text is too long."})
+    bounded_limit = max(1, min(limit, 10))
+    cache_key = (query.casefold(), bounded_limit)
+    now = time.monotonic()
+    with _place_search_lock:
+        cached = _place_search_cache.get(cache_key)
+        if cached and now - cached[0] < _PLACE_SEARCH_CACHE_TTL_SECONDS:
+            return cached[1]
+        wait = max(0.0, _PLACE_SEARCH_MIN_INTERVAL_SECONDS - (now - _last_place_search_at))
+        _last_place_search_at = now + wait
+    if wait > 0:
+        time.sleep(wait)
+    results = _nominatim_place_search(query, bounded_limit)
+    with _place_search_lock:
+        _place_search_cache[cache_key] = (time.monotonic(), results)
+        if len(_place_search_cache) > 256:
+            oldest_key = min(_place_search_cache, key=lambda key: _place_search_cache[key][0])
+            _place_search_cache.pop(oldest_key, None)
+    return results
 
 
 @app.post("/aoi/validate")
@@ -626,7 +861,173 @@ def imagery_scenes(req: ImageryScenesRequest, provider: SatelliteProvider = Depe
         raise HTTPException(422, {"code": e.code, "message": e.message})
     except Exception:
         raise HTTPException(502, {"code": "imagery_unavailable", "message": "Could not search satellite imagery right now."})
-    return sorted(scenes, key=lambda scene: scene["datetime"])[:100]
+    items = []
+    for scene in sorted(scenes, key=lambda item: item["datetime"])[:100]:
+        preview_url = scene.get("preview_url")
+        coverage = scene.get("coverage")
+        items.append({
+            "item_id": scene.get("item_id"),
+            "datetime": scene.get("datetime"),
+            "cloud_cover": scene.get("cloud_cover"),
+            "sensor": "Sentinel-2 L2A",
+            "collection": scene.get("collection") or "sentinel-2-l2a",
+            "preview_url": preview_url if isinstance(preview_url, str) and preview_url else None,
+            "coverage_fraction": float(coverage) if isinstance(coverage, (int, float)) and math.isfinite(float(coverage)) else None,
+            "data_available": True,
+        })
+    return items
+
+
+@app.post("/sar/scenes")
+def sar_scenes(req: SarSceneSearchRequest,
+               provider: Sentinel1Provider = Depends(get_sar_provider)):
+    _validate_aoi_size(req.aoi)
+    if req.end < req.start:
+        raise HTTPException(422, {"code": "invalid_date_range", "message": "End date must be on or after start date."})
+    try:
+        return provider.list_scenes(req.aoi, req.start, req.end)
+    except SatQueryError as exc:
+        raise HTTPException(422, {"code": exc.code, "message": exc.message}) from exc
+
+
+@app.post("/sar/analyze")
+def sar_analyze(req: SarAnalysisRequest,
+                provider: Sentinel1Provider = Depends(get_sar_provider)):
+    _, aoi_area_km2, _, _ = _validate_aoi_size(req.aoi)
+    if req.end < req.start:
+        raise HTTPException(422, {"code": "invalid_date_range", "message": "End date must be on or after start date."})
+    item_id = req.selected_scene_id.strip()
+    if not item_id:
+        raise HTTPException(422, {"code": "invalid_selected_scene", "message": "Select a Sentinel-1 scene first."})
+    job_id = uuid.uuid4().hex
+    created = _now()
+    query = "Sentinel-1 RTC VV/VH backscatter statistics"
+    structured = {"operation": "sar_backscatter", "sensor": "sentinel-1", "selected_scene_id": item_id}
+    try:
+        scene = provider.read_scene(req.aoi, item_id, req.start, req.end)
+        result = clean(summarize_rtc_scene(scene, aoi_area_km2))
+        save_history_job(job_id, created, query, structured, req.aoi, "completed", result)
+        return {"job_id": job_id, "status": "completed", "result": result}
+    except SatQueryError as exc:
+        save_history_job(job_id, created, query, structured, req.aoi, "failed",
+                         {"error": {"code": exc.code, "message": exc.message}})
+        raise HTTPException(422, {"code": exc.code, "message": exc.message}) from exc
+    except Exception as exc:
+        save_history_job(job_id, created, query, structured, req.aoi, "failed",
+                         {"error": {"code": "sar_analysis_failed", "message": "Sentinel-1 analysis failed."}})
+        raise HTTPException(502, {
+            "code": "sar_analysis_failed", "message": "Sentinel-1 analysis failed. No result was produced."
+        }) from exc
+
+
+@app.post("/fusion/scenes")
+def fusion_scenes(req: FusionSceneSearchRequest, optical_provider: SatelliteProvider = Depends(get_provider),
+                  sar_provider: Sentinel1Provider = Depends(get_sar_provider)):
+    """Discover only full-coverage, asset-complete source pairs within the configured time limit."""
+    _validate_aoi_size(req.aoi)
+    if req.end < req.start:
+        raise HTTPException(422, {"code": "invalid_date_range", "message": "End date must be on or after start date."})
+    try:
+        optical = optical_provider.list_scenes(req.aoi, req.start, req.end, req.max_cloud)
+        sar = sar_provider.list_scenes(req.aoi, req.start, req.end)
+        pairs = []
+        for s2 in optical:
+            if float(s2.get("coverage") or 0) < 0.999:
+                continue
+            for s1 in sar:
+                if float(s1.get("coverage_fraction") or 0) < 0.999 or not s1.get("required_polarizations_available") or not s1.get("analysis_supported"):
+                    continue
+                hours = temporal_separation_hours(s2.get("datetime"), s1.get("datetime"))
+                if hours <= settings.fusion_max_temporal_separation_days * 24:
+                    pairs.append({"optical": {"item_id": s2["item_id"], "datetime": s2["datetime"], "cloud_cover": s2.get("cloud_cover"), "coverage_fraction": s2.get("coverage")},
+                                  "sar": {"item_id": s1["item_id"], "datetime": s1["datetime"], "coverage_fraction": s1.get("coverage_fraction"), "polarizations": s1.get("polarizations", [])},
+                                  "temporal_separation_hours": hours,
+                                  "max_temporal_separation_days": settings.fusion_max_temporal_separation_days})
+        return {"pairs": sorted(pairs, key=lambda p: (p["temporal_separation_hours"], p["optical"]["datetime"])),
+                "max_temporal_separation_days": settings.fusion_max_temporal_separation_days,
+                "note": "Pairs are close in time, not simultaneous; dynamic conditions can differ between acquisitions."}
+    except SatQueryError as exc:
+        raise HTTPException(422, {"code": exc.code, "message": exc.message}) from exc
+
+
+@app.post("/fusion/analyze")
+def fusion_analyze(req: FusionAnalysisRequest, optical_provider: SatelliteProvider = Depends(get_provider),
+                   sar_provider: Sentinel1Provider = Depends(get_sar_provider)):
+    _validate_aoi_size(req.aoi)
+    if req.end < req.start:
+        raise HTTPException(422, {"code": "invalid_date_range", "message": "End date must be on or after start date."})
+    job_id, created = uuid.uuid4().hex, _now()
+    structured = {"operation": "optical_sar_fusion", "sensor": "sentinel-2+sentinel-1",
+                  "optical_scene_id": req.optical_scene_id, "sar_scene_id": req.sar_scene_id}
+    query = "Sentinel-2 L2A + Sentinel-1 RTC feature-level fusion"
+    try:
+        optical = optical_provider.get_selected_scene(req.aoi, req.optical_scene_id.strip(), ["red", "nir"], req.start, req.end, req.max_cloud)
+        sar = sar_provider.read_scene(req.aoi, req.sar_scene_id.strip(), req.start, req.end)
+        output = artifacts_dir() / job_id / "sentinel2_sentinel1_fusion.tif"
+        result, arrays, raster = fuse(optical, sar, output)
+        result["evidence"]["aoi_area_km2"] = _aoi_measurements(validate_aoi_geojson(req.aoi))[0]
+        result["limitations"] = ["The sources are not simultaneous; interpretation assumes conditions did not materially change during the stated separation.",
+                                 "This is a feature stack, not a physically fused reflectance/backscatter measurement.",
+                                 "SAR speckle and optical cloud masking can reduce overlap."]
+        result = clean(result)
+        save_history_job(job_id, created, query, structured, req.aoi, "completed", result)
+        _persist_artifacts(job_id, arrays, raster, "optical_sar_fusion")
+        return {"job_id": job_id, "status": "completed", "result": result}
+    except SatQueryError as exc:
+        save_history_job(job_id, created, query, structured, req.aoi, "failed", {"error": {"code": exc.code, "message": exc.message}})
+        raise HTTPException(422, {"code": exc.code, "message": exc.message}) from exc
+    except Exception as exc:
+        save_history_job(job_id, created, query, structured, req.aoi, "failed", {"error": {"code": "fusion_failed", "message": "Optical/SAR fusion failed; no result was produced."}})
+        raise HTTPException(502, {"code": "fusion_failed", "message": "Optical/SAR fusion failed; no result was produced."}) from exc
+
+
+@app.post("/caption/analyze")
+def caption_analyze(req: CaptionAnalysisRequest, provider: SatelliteProvider = Depends(get_provider)):
+    """Render the selected Sentinel-2 AOI to true-color RGB and caption it with
+    the local RSICD BLIP checkpoint. Real pixels only; the caption is model
+    output, never a template, and every run is recorded in history."""
+    _validate_aoi_size(req.aoi)
+    if req.end < req.start:
+        raise HTTPException(422, {"code": "invalid_date_range", "message": "End date must be on or after start date."})
+    item_id = req.selected_scene_id.strip()
+    if not item_id:
+        raise HTTPException(422, {"code": "invalid_selected_scene", "message": "Select a Sentinel-2 scene first."})
+    job_id = uuid.uuid4().hex
+    created = _now()
+    query = "Sentinel-2 scene caption (BLIP image-to-text)"
+    structured = {"operation": "image_captioning", "sensor": "sentinel-2", "selected_scene_id": item_id}
+    try:
+        scene = provider.get_selected_scene(req.aoi, item_id, ["red", "green", "blue"],
+                                            req.start, req.end, req.max_cloud)
+        output_image = artifacts_dir() / job_id / "caption_scene.png"
+        result = clean(caption_scene(scene, output_image_path=output_image))
+        result["evidence"]["aoi_area_km2"] = _aoi_measurements(validate_aoi_geojson(req.aoi))[0]
+        result["image_url"] = f"/caption/{job_id}/image.png"
+        save_history_job(job_id, created, query, structured, req.aoi, "completed", result)
+        return {"job_id": job_id, "status": "completed", "result": result, "image_url": result["image_url"]}
+    except CaptionModelUnavailableError as exc:
+        save_history_job(job_id, created, query, structured, req.aoi, "failed",
+                         {"error": {"code": exc.code, "message": exc.message}})
+        raise HTTPException(503, {"code": exc.code, "message": exc.message}) from exc
+    except SatQueryError as exc:
+        save_history_job(job_id, created, query, structured, req.aoi, "failed",
+                         {"error": {"code": exc.code, "message": exc.message}})
+        raise HTTPException(422, {"code": exc.code, "message": exc.message}) from exc
+    except Exception as exc:
+        save_history_job(job_id, created, query, structured, req.aoi, "failed",
+                         {"error": {"code": "caption_failed", "message": "Scene captioning failed; no result was produced."}})
+        raise HTTPException(502, {"code": "caption_failed", "message": "Scene captioning failed; no result was produced."}) from exc
+
+
+@app.get("/caption/{job_id}/image.png")
+def caption_image(job_id: str):
+    """Serve the deterministic RGB rendering that was captioned for a job."""
+    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+        raise HTTPException(404, "Caption image is not available for this job.")
+    path = artifacts_dir() / job_id / "caption_scene.png"
+    if not path.is_file():
+        raise HTTPException(404, "Caption image is not available for this job.")
+    return FileResponse(path, media_type="image/png")
 
 
 @app.post("/query/parse")
@@ -640,7 +1041,13 @@ def grounding_check(req: GroundingRequest):
     return check_grounding(req.answer, req.facts)
 
 
-def _run_operation(q, aoi: dict, max_cloud: float, provider: SatelliteProvider, llm_fn) -> dict:
+def _run_operation(q, aoi: dict, max_cloud: float, provider: SatelliteProvider, llm_fn,
+                   selected_scene_id: Optional[str] = None) -> dict:
+    if selected_scene_id and q.operation not in (Operation.INDEX_STATS, Operation.LAND_COVER):
+        raise SatQueryError(
+            "An explicitly selected scene supports only single-date index statistics and land-cover analysis. "
+            "Clear the scene selection to run change detection or a time series."
+        )
     if q.operation == Operation.CHANGE_DETECTION:
         return analysis.run_change(provider, aoi, q.date_a, q.date_b, q.index or "NDVI", q.thresholds or None,
                                    max_cloud, llm_fn=llm_fn)
@@ -648,9 +1055,13 @@ def _run_operation(q, aoi: dict, max_cloud: float, provider: SatelliteProvider, 
         return analysis.run_time_series(provider, aoi, q.series_range, q.index or "NDVI", max_cloud,
                                         llm_fn=llm_fn)
     if q.operation == Operation.INDEX_STATS:
-        return analysis.run_index_stats(provider, aoi, q.date_a, q.index, max_cloud, llm_fn=llm_fn)
+        return analysis.run_index_stats(provider, aoi, q.date_a, q.index, max_cloud, llm_fn=llm_fn,
+                                        selected_scene_id=selected_scene_id)
     if q.operation == Operation.LAND_COVER:
-        return land_cover.run_land_cover(provider, aoi, q.date_a, get_classifier(), max_cloud, llm_fn=llm_fn)
+        return land_cover.run_land_cover(provider, aoi, q.date_a, get_classifier(), max_cloud,
+                                         llm_fn=llm_fn, selected_scene_id=selected_scene_id)
+    if q.operation == Operation.COMPARE_REGIONS:
+        raise SatQueryError("compare_regions is not supported by /analysis/run. Use /analysis/compare with two AOIs.")
     raise SatQueryError(f"'{q.operation.value}' is not implemented in this build yet.")
 
 
@@ -709,16 +1120,23 @@ def _scene_metadata(result: dict) -> tuple[str | None, str | None]:
     return _distinct_join(tiles), _distinct_join(dates)
 
 
-def _execute(job_id: str, q, aoi: dict, max_cloud: float, provider: SatelliteProvider):
+def _execute(job_id: str, q, aoi: dict, max_cloud: float, provider: SatelliteProvider,
+             selected_scene_id: Optional[str] = None):
     start_time = time.time()
+    coverage_info = None
+    try:
+        job_store.update_job(job_id, status="processing", progress={"percent": 10})
+    except Exception:
+        pass
     with _lock:
         if job_id in _jobs:
             _jobs[job_id]["status"] = "processing"
+            _jobs[job_id]["progress"] = {"percent": 10}
             if "stages" in _jobs[job_id] and len(_jobs[job_id]["stages"]) > 0:
                 _jobs[job_id]["stages"][0]["status"] = "processing"
     try:
         llm_fn = make_llm_fn(get_llm_client())
-        res = _run_operation(q, aoi, max_cloud, provider, llm_fn)
+        res = _run_operation(q, aoi, max_cloud, provider, llm_fn, selected_scene_id)
         arrays = res.pop("arrays", None)
         raster = res.pop("raster", None)
         result = clean(res)
@@ -734,78 +1152,220 @@ def _execute(job_id: str, q, aoi: dict, max_cloud: float, provider: SatellitePro
 
         # Tile and acquisition date come from the scene evidence actually used.
         tile_str, date_str = _scene_metadata(result)
+        # Try to extract coverage from result evidence/metrics if present
+        try:
+            ev = result.get("evidence") if isinstance(result, dict) else None
+            if isinstance(ev, dict):
+                if ev.get("coverage") is not None:
+                    coverage_info = ev.get("coverage")
+                elif isinstance(ev.get("metrics"), dict) and ev["metrics"].get("coverage") is not None:
+                    coverage_info = ev["metrics"].get("coverage")
+        except Exception:
+            pass
+        if coverage_info is None and result.get("coverage") is not None:
+            coverage_info = result.get("coverage")
 
+        provider_info = {"name": "Sentinel-2", "tile": tile_str, "date": date_str}
+        if coverage_info is not None:
+            provider_info["coverage"] = coverage_info
+
+        stages_done = [
+            {"name": "Data Fetching (Sentinel-2)", "status": "completed"},
+            {"name": "Preprocessing", "status": "completed"},
+            {"name": "Analysis", "status": "completed"},
+            {"name": "Results Ready", "status": "completed", "duration": elapsed},
+        ]
         with _lock:
             if arrays is not None and raster is not None:
                 _store_layer_data(job_id, arrays, raster, q.operation)
-            _jobs[job_id].update(
-                status="completed",
-                result=result,
-                finished=_now(),
-                stages=[
-                    {"name": "Data Fetching (Sentinel-2)", "status": "completed"},
-                    {"name": "Preprocessing", "status": "completed"},
-                    {"name": "Analysis", "status": "completed"},
-                    {"name": "Results Ready", "status": "completed", "duration": elapsed},
-                ],
-                provider_info={"name": "Sentinel-2", "tile": tile_str, "date": date_str},
-            )
+            if job_id in _jobs:
+                _jobs[job_id].update(
+                    status="completed",
+                    result=result,
+                    finished=_now(),
+                    stages=stages_done,
+                    provider_info=provider_info,
+                    progress={"percent": 100},
+                )
+        # Persist raster artifacts so completed results survive a backend restart.
+        if arrays is not None and raster is not None:
+            _persist_artifacts(job_id, arrays, raster, q.operation)
+        try:
+            job_store.update_job(job_id, status="completed", stages=stages_done,
+                                 provider_info=provider_info,
+                                 finished=_now(), progress={"percent": 100})
+        except Exception:
+            pass
+
     except SatQueryError as e:
         error = {"code": e.code, "message": e.message}
+        # Try to extract partial coverage info from error message
+        try:
+            msg = str(e.message) if hasattr(e, 'message') else str(e)
+            m = re.search(r'best coverage ([0-9]*\.?[0-9]+)%', msg)
+            cov = None
+            if m:
+                try:
+                    cov = float(m.group(1)) / 100.0
+                except Exception:
+                    cov = None
+            provider_info_fail = {"name": "Sentinel-2", "tile": None, "date": None}
+            if cov is not None or 'partial' in msg.lower() or 'coverage' in msg.lower():
+                provider_info_fail["coverage"] = {"status": "partial", "fraction": cov, "note": msg}
+            try:
+                with _lock:
+                    if job_id in _jobs:
+                        job = _jobs[job_id]
+                        created = job.get("created")
+                        if job.get("provider_info") and provider_info_fail.get("coverage") is None:
+                            pass  # keep existing if any
+                    else:
+                        created = _now()
+                save_history_job(job_id, created, q.raw_text, q.model_dump(mode="json"), aoi,
+                                 "failed", {"error": error, "coverage": provider_info_fail.get("coverage")})
+            except Exception:
+                pass
+            try:
+                job_store.update_job(job_id, status="failed", error=error, finished=_now(), progress={"percent": 100}, provider_info=provider_info_fail)
+            except Exception:
+                pass
+            with _lock:
+                if job_id in _jobs:
+                    _jobs[job_id].update(status="failed", error=error, finished=_now(), progress={"percent": 100}, provider_info=provider_info_fail)
+            return
+        except Exception:
+            pass
         try:
             with _lock:
-                job = _jobs[job_id]
-                created = job["created"]
+                if job_id in _jobs:
+                    job = _jobs[job_id]
+                    created = job.get("created")
+                else:
+                    created = _now()
             save_history_job(job_id, created, q.raw_text, q.model_dump(mode="json"), aoi,
                              "failed", {"error": error})
         except Exception:
             pass
-        with _lock:
-            _jobs[job_id].update(status="failed", error=error, finished=_now())
-    except Exception as e:  # never leak a stack trace; never fabricate a result
-        error = {"code": "internal_error", "message": "Analysis failed."}
         try:
-            with _lock:
-                job = _jobs[job_id]
-                created = job["created"]
-            save_history_job(job_id, created, q.raw_text, q.model_dump(mode="json"), aoi, "failed", {"error": error})
+            job_store.update_job(job_id, status="failed", error=error, finished=_now(), progress={"percent": 100})
         except Exception:
             pass
         with _lock:
-            _jobs[job_id].update(status="failed", error=error, finished=_now())
+            if job_id in _jobs:
+                _jobs[job_id].update(status="failed", error=error, finished=_now(), progress={"percent": 100})
+    except Exception as e:  # never leak a stack trace; never fabricate a result
+        if isinstance(e, SatQueryError):
+            error = {"code": e.code, "message": e.message}
+        else:
+            error = {"code": "internal_error", "message": "Analysis failed."}
+        try:
+            with _lock:
+                if job_id in _jobs:
+                    job = _jobs[job_id]
+                    created = job.get("created")
+                else:
+                    created = _now()
+            save_history_job(job_id, created, q.raw_text, q.model_dump(mode="json"), aoi, "failed", {"error": error})
+        except Exception:
+            pass
+        try:
+            job_store.update_job(job_id, status="failed", error=error, finished=_now(), progress={"percent": 100})
+        except Exception:
+            pass
+        with _lock:
+            if job_id in _jobs:
+                _jobs[job_id].update(status="failed", error=error, finished=_now(), progress={"percent": 100})
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+@app.post("/analysis/investigate")
+def analysis_investigate(req: InvestigationRequest, provider: SatelliteProvider = Depends(get_provider)):
+    if req.aoi is not None:
+        try:
+            _validate_aoi_size(req.aoi)
+        except SatQueryError as e:
+            raise HTTPException(422, {"code": e.code, "message": e.message})
+    overrides = {}
+    if req.date_a:
+        overrides["date_a"] = {"start": req.date_a.start.isoformat(), "end": req.date_a.end.isoformat()}
+    if req.date_b:
+        overrides["date_b"] = {"start": req.date_b.start.isoformat(), "end": req.date_b.end.isoformat()}
+    if req.series_range:
+        overrides["series_range"] = {"start": req.series_range.start.isoformat(), "end": req.series_range.end.isoformat()}
+    try:
+        result = run_investigation(req.query, req.aoi, req.reference_date, req.max_cloud, provider, get_llm_client(), date_overrides=overrides or None)
+        return clean(result.model_dump(mode="json"))
+    except SatQueryError as e:
+        raise HTTPException(422, {"code": e.code, "message": e.message})
+    except Exception:
+        raise HTTPException(500, {"code": "internal_error", "message": "Investigation failed."})
+
+
 @app.post("/analysis/run")
 def analysis_run(req: RunRequest, bg: BackgroundTasks, provider: SatelliteProvider = Depends(get_provider)):
     _validate_aoi_size(req.aoi)
     q = parse_query_smart(req.query, req.reference_date, get_llm_client())
+    selected_scene_id = req.selected_scene_id.strip() if req.selected_scene_id is not None else None
+    if req.selected_scene_id is not None and not selected_scene_id:
+        raise HTTPException(422, {
+            "code": "invalid_selected_scene",
+            "message": "Selected scene ID is empty. Refresh the scene list and select a valid scene.",
+        })
+    if selected_scene_id:
+        if q.operation not in (Operation.INDEX_STATS, Operation.LAND_COVER):
+            raise HTTPException(422, {
+                "code": "selected_scene_unsupported",
+                "message": "Selected-scene mode supports only single-date index statistics and land-cover analysis. Clear the scene selection to run change detection or a time series.",
+            })
+        required_bands = analysis._bands_for(q.index) if q.operation == Operation.INDEX_STATS and q.index else (
+            list(LAND_COVER_LOGICAL_BANDS) if q.operation == Operation.LAND_COVER else [])
+        try:
+            selected_meta = provider.resolve_scene(
+                req.aoi, selected_scene_id, req.max_cloud,
+                q.date_a.start if q.date_a else None,
+                q.date_a.end if q.date_a else None,
+                required_bands,
+            )
+        except SatQueryError as exc:
+            raise HTTPException(422, {"code": exc.code, "message": exc.message}) from exc
+        if q.date_a is None:
+            selected_date = selected_meta["acquisition_date"]
+            q.date_a = DateRange(start=selected_date, end=selected_date)
+            q.missing = [missing for missing in q.missing if "date or month" not in missing]
     msg = clarification_message(q)
     if msg:
         return {"status": "needs_clarification", "message": msg, "structured_query": q.model_dump(mode="json")}
     job_id = uuid.uuid4().hex
+    created = _now()
+    qd = q.model_dump(mode="json")
+    stages = [
+        {"name": "Data Fetching (Sentinel-2)", "status": "queued"},
+        {"name": "Preprocessing", "status": "queued"},
+        {"name": "Analysis", "status": "queued"},
+        {"name": "Results Ready", "status": "queued"},
+    ]
+    provider_info = {"name": "Sentinel-2", "tile": None, "date": None}
+    try:
+        job_store.create_job(job_id, req.query, qd, req.aoi)
+        job_store.update_job(job_id, status="queued", stages=stages, provider_info=provider_info, progress={"percent": 0})
+    except Exception:
+        pass
     with _lock:
         _jobs[job_id] = {
             "job_id": job_id,
             "status": "queued",
-            "created": _now(),
+            "created": created,
             "query": req.query,
-            "structured_query": q.model_dump(mode="json"),
-            "stages": [
-                {"name": "Data Fetching (Sentinel-2)", "status": "queued"},
-                {"name": "Preprocessing", "status": "queued"},
-                {"name": "Analysis", "status": "queued"},
-                {"name": "Results Ready", "status": "queued"},
-            ],
-            # The imagery tile and acquisition date are unknown until the scenes are
-            # fetched, so they stay null here instead of guessing a placeholder.
-            "provider_info": {"name": "Sentinel-2", "tile": None, "date": None},
-
+            "structured_query": qd,
+            "aoi": req.aoi,
+            "stages": stages,
+            "provider_info": provider_info,
+            "progress": {"percent": 0},
         }
-    bg.add_task(_execute, job_id, q, req.aoi, req.max_cloud, provider)
+    bg.add_task(_execute, job_id, q, req.aoi, req.max_cloud, provider, selected_scene_id)
     return {"status": "queued", "job_id": job_id}
 
 
@@ -819,6 +1379,19 @@ def history_detail(job_id: str):
     record = get_history(job_id)
     if record is None:
         raise HTTPException(404, "Unknown history record.")
+    # Old persisted results predate trustworthy sensor identity. Annotate the
+    # response copy only; do not rewrite their stored JSON or trust legacy source
+    # defaults (or processing level) as proof of a sensor.
+    result = record.get("result")
+    evidence = result.get("evidence") if isinstance(result, dict) else None
+    scenes = evidence.get("scenes") if isinstance(evidence, dict) else None
+    if isinstance(scenes, list):
+        for scene in scenes:
+            if isinstance(scene, dict) and scene.get("sensor_identity") not in ("sentinel-2", "other", "unknown"):
+                scene["sensor_identity"] = "unknown"
+                scene["sensor"] = None
+            elif isinstance(scene, dict) and scene.get("sensor_identity") == "unknown":
+                scene["sensor"] = None
     return record
 
 
@@ -922,19 +1495,24 @@ def _comparison_metrics(result: dict) -> dict[str, float]:
 
 @app.post("/analysis/compare")
 def analysis_compare(req: CompareRequest, provider: SatelliteProvider = Depends(get_provider)):
-    for aoi in (req.aoi_a, req.aoi_b):
+    for label, aoi in (("A", req.aoi_a), ("B", req.aoi_b)):
         try:
-            validate_aoi_geojson(aoi)
-        except SatQueryError as e:
-            raise HTTPException(422, {"code": e.code, "message": e.message})
+            _validate_aoi_size(aoi)
+        except HTTPException as exc:
+            detail = exc.detail
+            if isinstance(detail, dict) and isinstance(detail.get("message"), str):
+                detail = {**detail, "message": f"Area {label}: {detail['message']}"}
+            raise HTTPException(exc.status_code, detail) from exc
     q = parse_query_smart(req.query, req.reference_date, get_llm_client())
     message = clarification_message(q)
     if message:
         raise HTTPException(422, {"code": "needs_clarification", "message": message})
     llm_fn = make_llm_fn(get_llm_client())
     try:
-        result_a = _run_operation(q, req.aoi_a, req.max_cloud, provider, llm_fn)
-        result_b = _run_operation(q, req.aoi_b, req.max_cloud, provider, llm_fn)
+        result_a, result_b = run_compare_operation(
+            q, req.aoi_a, req.aoi_b, provider, req.max_cloud, llm_fn,
+            classifier=get_classifier() if q.operation == Operation.LAND_COVER else None,
+        )
     except SatQueryError as e:
         raise HTTPException(422, {"code": e.code, "message": e.message})
     for result in (result_a, result_b):
@@ -956,19 +1534,97 @@ def analysis_compare(req: CompareRequest, provider: SatelliteProvider = Depends(
 def job_status(job_id: str):
     with _lock:
         job = _jobs.get(job_id)
-    if not job:
-        raise HTTPException(404, "Unknown job.")
-    return job
+    if job:
+        # Try to sync from DB for fresher state
+        try:
+            j = job_store.get_job(job_id)
+            if j:
+                merged = dict(job)
+                merged.update({k: v for k, v in j.items() if k in ("status", "stages", "error", "finished", "updated", "progress", "provider_info")})
+                with _lock:
+                    _jobs[job_id].update(merged)
+                return clean(_jobs[job_id])
+        except Exception:
+            pass
+        return clean(job)
+    try:
+        j = job_store.get_job(job_id)
+        if j:
+            return clean(j)
+    except Exception:
+        pass
+    raise HTTPException(404, "Unknown job.")
+
+
+def _load_layer_artifacts(job_id: str, job: dict) -> Optional[dict]:
+    """Load raster arrays and grid metadata persisted to the artifact store.
+
+    Mirrors the alias keys that _store_layer_data writes at analysis time so
+    layer endpoints keep working after a restart wipes the in-memory store.
+    Returns None when artifacts are missing or corrupt.
+    """
+    try:
+        data = load_artifacts(job_id)
+    except Exception:
+        return None
+    if not isinstance(data, dict) or not data:
+        return None
+    # Rebuild the display aliases created when the result was first stored.
+    if "index" not in data and isinstance(data.get("index_b"), np.ndarray):
+        data["index"] = data["index_b"]
+    if "classes" not in data and isinstance(data.get("class_map"), np.ndarray):
+        data["classes"] = data["class_map"]
+    if "landcover" not in data and isinstance(data.get("class_map"), np.ndarray):
+        data["landcover"] = data["class_map"]
+    # Grid metadata is required for bounds and rendering.
+    if "transform" not in data or "crs" not in data:
+        return None
+    return data
 
 
 def _completed_layer_data(job_id: str) -> dict:
     with _lock:
         job = _jobs.get(job_id)
-        if job is None:
+    if job is None:
+        try:
+            j = job_store.get_job(job_id)
+            if j:
+                job = j
+        except Exception:
+            pass
+    # History-only fallback: when both in-memory and SQLite job records are
+    # missing, consult persisted history (read-only). This never rewrites
+    # history or creates a SQLite jobs row.
+    if job is None:
+        try:
+            record = get_history(job_id)
+        except Exception:
+            record = None
+        if record is None:
             raise HTTPException(404, "Unknown job.")
-        if job["status"] != "completed":
+        if record.get("status") != "completed":
+            # Failed/non-completed history records must never be treated as
+            # completed and must not trigger raster recovery.
             raise HTTPException(409, "Analysis job is not completed.")
         layer_data = _layer_store.get(job_id)
+        if layer_data is None:
+            layer_data = _load_layer_artifacts(job_id, record)
+            if layer_data is not None:
+                with _lock:
+                    _layer_store[job_id] = layer_data
+        if layer_data is None:
+            raise HTTPException(404, "No raster layers are available for this job.")
+        return layer_data
+    if job["status"] != "completed":
+        raise HTTPException(409, "Analysis job is not completed.")
+    layer_data = _layer_store.get(job_id)
+    if layer_data is None:
+        # Restart recovery: the in-memory store was wiped, so reload the
+        # persisted artifacts from disk and re-populate the in-memory cache.
+        layer_data = _load_layer_artifacts(job_id, job)
+        if layer_data is not None:
+            with _lock:
+                _layer_store[job_id] = layer_data
     if layer_data is None:
         raise HTTPException(404, "No raster layers are available for this job.")
     return layer_data

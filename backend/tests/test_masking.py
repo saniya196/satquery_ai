@@ -52,3 +52,13 @@ def test_build_valid_mask_combines_everything():
 def test_invalid_aoi_rejected(bad):
     with pytest.raises(InvalidAOIError):
         validate_aoi_geojson(bad)
+
+
+def test_to_reflectance_ignores_misreported_offset_for_s2_l2a():
+    dn_nir = np.array([5322])
+    dn_red = np.array([255])
+    nir = to_reflectance(dn_nir, scale=1e-4, offset=-0.1)
+    red = to_reflectance(dn_red, scale=1e-4, offset=-0.1)
+    assert nir[0] > 0 and red[0] > 0
+    ndvi = (nir - red) / (nir + red)
+    assert np.isfinite(ndvi[0]) and -1 <= ndvi[0] <= 1

@@ -36,7 +36,7 @@ The implemented components and request/data flow are described in [docs/ARCHITEC
 
 ## AI/ML components
 
-- **Question interpretation:** rule-based English/Hindi parser works without a key. An optional Gemini client can emit the same structured query shape.
+- **Question interpretation:** the rule-based English/Hindi parser works without a key, including month names, explicit years/ranges, and relative trend periods. An optional Gemini client can emit the same structured query shape.
 - **Answer phrasing:** the LLM receives structured facts only. Numeric/date claims are validated against the result; a deterministic template is used when needed.
 - **Land cover:** NumPy inference for a ResNet18 model trained on EuroSAT, using five Sentinel-2 bands and 64×64-pixel tiles. Weights are loaded from `models/`; training is not part of the API container.
 
@@ -70,6 +70,9 @@ No screenshots are included yet; these placeholders are not product imagery.
 - `Show land cover for June`
 - `Show the vegetation trend over the last year`
 - `Show NDWI for 2025`
+- `Show NDVI trend from 2022 to 2025`
+- `जून 2026 में NDVI दिखाएं`
+- `पिछले साल का NDVI रुझान दिखाएं`
 
 Dates and supported operation details are required. The parser asks for missing periods instead of assuming them.
 
@@ -91,7 +94,7 @@ py -3.13 -m venv .venv
 .venv\Scripts\activate.bat
 python -m pip install -r requirements.txt
 python -m pytest -q
-uvicorn app.api.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn app.api.main:app --reload --host 127.0.0.1 --port 8001
 ```
 
 In another CMD window, frontend:
@@ -99,11 +102,11 @@ In another CMD window, frontend:
 ```cmd
 cd /d C:\path\to\satquery_ai\frontend
 npm ci
-set VITE_API_URL=http://localhost:8000
+set VITE_API_URL=http://localhost:8001
 npm run dev -- --host localhost
 ```
 
-Open `http://localhost:5173`. The optional Gemini key can be set in the backend CMD session as `set GEMINI_API_KEY=...`; the rule-based parser runs without it. Never commit real keys.
+Open `http://localhost:5173`. The optional Gemini key can be set in the backend CMD session as `set GEMINI_API_KEY=...`; the rule-based parser runs without it. Never commit real keys. The backend listens on `http://127.0.0.1:8001`.
 
 ### Docker Compose (Windows CMD)
 
@@ -115,11 +118,11 @@ notepad .env
 docker compose up --build
 ```
 
-Set any real provider key directly in the local `.env` file. Open the UI at `http://localhost:8080` and API docs at `http://localhost:8000/docs`. SQLite data and scene cache persist in named Docker volumes; `models/` is mounted read-only. Stop the services with `docker compose down`.
+Set any real provider key directly in the local `.env` file. Open the UI at `http://localhost:8080` and API docs at `http://localhost:8001/docs`. SQLite data and scene cache persist in named Docker volumes; `models/` is mounted read-only. Stop the services with `docker compose down`.
 
 ## API documentation
 
-The running OpenAPI interface is at `http://localhost:8000/docs`. Implemented route summary:
+The running OpenAPI interface is at `http://localhost:8001/docs`. Implemented route summary:
 
 - `GET /health`
 - `POST /aoi/validate`

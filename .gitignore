@@ -73,3 +73,21 @@ Thumbs.db
 *.log
 *.local
 *.clean
+
+
+# Large downloaded model weights
+*.safetensors
+
+# Pytest temporary artifacts
+backend/.pytest-fusion/
+
+# Local model download caches
+models/*/.cache/
+# Downloaded model weights
+*.safetensors
+
+# Pytest temporary artifacts
+backend/.pytest-fusion/
+
+# Local model caches
+models/*/.cache/

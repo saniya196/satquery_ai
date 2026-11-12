@@ -7,6 +7,7 @@ from app.core.config import DEFAULT_CHANGE_THRESHOLDS, settings
 from app.core.errors import InsufficientValidPixelsError
 from app.rendering.geo import utm_to_lonlat, parse_utm_epsg
 
+
 CLASS_CODES = {
     "significant_decrease": -2,
     "moderate_decrease": -1,
@@ -36,6 +37,13 @@ def find_hotspots(class_map: np.ndarray, diff: np.ndarray, pixel_area_m2: float,
     """Connected components (8-connectivity) of significant-decrease pixels."""
     mask = class_map == CLASS_CODES["significant_decrease"]
     labels, n = ndimage.label(mask, structure=np.ones((3, 3), dtype=int))
+    # Resolve UTM conversion once if supported
+    utm = None
+    if transform is not None and crs is not None:
+        try:
+            utm = parse_utm_epsg(crs)
+        except Exception:
+            utm = None
     spots = []
     for i in range(1, n + 1):
         region = labels == i
@@ -43,19 +51,48 @@ def find_hotspots(class_map: np.ndarray, diff: np.ndarray, pixel_area_m2: float,
         if count < min_pixels:
             continue
         rows, cols = np.where(region)
+        vals = diff[region]
+        finite = vals[np.isfinite(vals)]
+        mean_diff = float(np.nanmean(vals))
+        median_diff = float(np.nanmedian(vals)) if finite.size else None
+        std_diff = float(np.nanstd(vals)) if finite.size else None
+        min_diff = float(np.nanmin(vals)) if finite.size else None
+        max_diff = float(np.nanmax(vals)) if finite.size else None
+        valid_pixel_count = int(finite.size)
+        r0, c0, r1, c1 = int(rows.min()), int(cols.min()), int(rows.max()), int(cols.max())
         spot = {
             "id": i,
+            "class": "significant_decrease",
+            "class_code": int(CLASS_CODES["significant_decrease"]),
+            "direction": "decrease",
             "pixels": count,
+            "valid_pixel_count": valid_pixel_count,
             "area_km2": count * pixel_area_m2 / 1e6,
-            "bbox_rowcol": [int(rows.min()), int(cols.min()), int(rows.max()), int(cols.max())],
+            "bbox_rowcol": [r0, c0, r1, c1],
             "centroid_rowcol": [float(rows.mean()), float(cols.mean())],
-            "mean_diff": float(np.nanmean(diff[region])),
+            "mean_diff": mean_diff,
+            "median_diff": median_diff,
+            "std_diff": std_diff,
+            "min_diff": min_diff,
+            "max_diff": max_diff,
         }
-        if transform is not None and crs is not None:
-            zone, north = parse_utm_epsg(crs)
-            easting, northing = transform * (float(cols.mean()) + 0.5, float(rows.mean()) + 0.5)
-            lon, lat = utm_to_lonlat(easting, northing, zone, north)
-            spot["centroid_lonlat"] = [lon, lat]
+        if utm is not None:
+            try:
+                zone, north = utm
+                easting, northing = transform @ (float(cols.mean()) + 0.5, float(rows.mean()) + 0.5)
+                lon, lat = utm_to_lonlat(easting, northing, zone, north)
+                spot["centroid_lonlat"] = [lon, lat]
+                # Geographic bbox [min_lon,min_lat,max_lon,max_lat] from row/col bbox corners
+                corners = [(c0, r0), (c1 + 1, r0), (c1 + 1, r1 + 1), (c0, r1 + 1)]
+                lons, lats = [], []
+                for col, row in corners:
+                    ex, ny = transform @ (float(col), float(row))
+                    lo, la = utm_to_lonlat(ex, ny, zone, north)
+                    lons.append(float(lo)); lats.append(float(la))
+                spot["bbox_lonlat"] = [min(lons), min(lats), max(lons), max(lats)]
+            except Exception:
+                # Preserve existing centroid behavior as best-effort; omit/skip geo fields if conversion fails
+                pass
         spots.append(spot)
     spots.sort(key=lambda s: s["area_km2"], reverse=True)
     return spots[:top_n]

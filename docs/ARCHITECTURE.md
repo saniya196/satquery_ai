@@ -129,11 +129,11 @@ sequenceDiagram
 ```mermaid
 graph LR
     Browser[Browser] -->|HTTP :8080| Nginx[Frontend Nginx static server]
-    Browser -->|HTTP API :8000| API[FastAPI / Uvicorn]
+    Browser -->|HTTP API :8001| API[FastAPI / Uvicorn]
     API --> DB[(SQLite named volume)]
     API --> Cache[(Scene cache named volume)]
     API --> Models["./models mounted read-only"]
     API --> STAC[Earth Search and Sentinel-2 COGs]
 ```
 
-The browser calls the API directly; `VITE_API_URL` is compiled into the frontend bundle. `SATQUERY_CORS_ORIGINS` must include the browser origin. Docker Compose defaults to `http://localhost:8080` for the frontend and `http://localhost:8000` for the API.
+The browser calls the API directly; `VITE_API_URL` is compiled into the frontend bundle. `SATQUERY_CORS_ORIGINS` must include the browser origin. Docker Compose defaults to `http://localhost:8080` for the frontend and `http://localhost:8001` for the API.

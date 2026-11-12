@@ -1,5 +1,5 @@
 """Synthetic scenes for TESTS ONLY. Never used by the application."""
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 import numpy as np
 from affine import Affine
 
@@ -11,7 +11,8 @@ SHAPE = (60, 60)
 AOI = {"type": "Polygon", "coordinates": [[[78.0, 17.0], [78.01, 17.0], [78.01, 17.01], [78.0, 17.01], [78.0, 17.0]]]}
 
 
-def make_scene(item_id, dt, ndvi_left=0.8, ndvi_right=0.8, cloud=5.0, cloudy_fraction=0.0, tf=TF):
+def make_scene(item_id, dt, ndvi_left=0.8, ndvi_right=0.8, cloud=5.0, cloudy_fraction=0.0, tf=TF,
+               coverage=None):
     """Synthetic-only scene: pick NIR=0.5 and solve RED for the requested NDVI."""
     nir = np.full(SHAPE, 0.5)
     red = np.empty(SHAPE)
@@ -23,7 +24,10 @@ def make_scene(item_id, dt, ndvi_left=0.8, ndvi_right=0.8, cloud=5.0, cloudy_fra
         scl[:n, :] = 9
     bands = {"blue": np.full(SHAPE, 0.1), "green": np.full(SHAPE, 0.2), "red": red,
              "nir": nir, "swir1": np.full(SHAPE, 0.15)}
-    return dict(item_id=item_id, datetime=dt, cloud=cloud, bands=bands, scl=scl, tf=tf)
+    scene = dict(item_id=item_id, datetime=dt, cloud=cloud, bands=bands, scl=scl, tf=tf)
+    if coverage is not None:
+        scene["coverage"] = coverage
+    return scene
 
 
 class FakeProvider(SatelliteProvider):
@@ -35,8 +39,36 @@ class FakeProvider(SatelliteProvider):
         for s in self.scenes.values():
             d = datetime.fromisoformat(s["datetime"]).date()
             if start <= d <= end and s["cloud"] <= max_cloud:
-                out.append({"item_id": s["item_id"], "datetime": s["datetime"], "cloud_cover": s["cloud"]})
+                item = {"item_id": s["item_id"], "datetime": s["datetime"], "cloud_cover": s["cloud"],
+                        "provider": "synthetic test provider", "collection": "sentinel-2-l2a",
+                        "platform": "Sentinel-2A", "processing_level": "L2A"}
+                if "coverage" in s:
+                    item["coverage"] = s["coverage"]
+                out.append(item)
         return sorted(out, key=lambda x: x["datetime"])
+
+    def resolve_scene(self, aoi_geojson, item_id, max_cloud, start=None, end=None,
+                      required_bands=None, min_coverage=0.99):
+        scene = self.scenes.get(item_id)
+        if scene is None:
+            raise NoImageryError(f"Selected scene {item_id} was not found in the synthetic test catalog.")
+        acquired = datetime.fromisoformat(scene["datetime"].replace("Z", "+00:00")).date()
+        if start is not None and (end is None or not start <= acquired <= end):
+            raise NoImageryError(f"Selected scene {item_id} is outside the requested date range.")
+        if scene["cloud"] > max_cloud:
+            raise NoImageryError(f"Selected scene {item_id} exceeds the cloud-cover limit.")
+        missing = set(required_bands or ()) - set(scene["bands"])
+        if missing:
+            raise NoImageryError(f"Selected scene {item_id} is missing required bands: {', '.join(sorted(missing))}.")
+        utc_acquired = datetime.fromisoformat(scene["datetime"].replace("Z", "+00:00")).astimezone(timezone.utc).date()
+        metadata = {"item_id": item_id, "datetime": scene["datetime"], "acquisition_date": acquired,
+                    "utc_acquisition_date": utc_acquired,
+                    "cloud_cover": scene["cloud"], "collection": "sentinel-2-l2a",
+                    "provider": "synthetic test provider", "platform": "Sentinel-2A",
+                    "processing_level": "L2A"}
+        if "coverage" in scene:
+            metadata["coverage"] = scene["coverage"]
+        return metadata
 
     def get_scene(self, aoi_geojson, item_id, bands):
         s = self.scenes[item_id]

@@ -33,3 +33,11 @@ class UnsupportedQueryError(SatQueryError):
 
 class InsufficientDataError(SatQueryError):
     code = "insufficient_data"
+
+
+class CaptionModelUnavailableError(SatQueryError):
+    code = "caption_model_unavailable"
+
+
+class CaptionGenerationError(SatQueryError):
+    code = "caption_generation_failed"

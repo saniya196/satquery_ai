@@ -7,7 +7,7 @@ import pytest
 from app.llm.client import GeminiClient, LLMClient, LLMError, get_llm_client
 from app.llm.explainer import make_llm_fn
 from app.query_engine.llm_parser import has_date_cue, parse_query_smart, parse_with_llm
-from app.schemas.query import Operation
+from app.schemas.query import DateRange, Operation
 from app.validation.grounding import grounded_answer
 
 REF = date(2026, 10, 7)
@@ -58,6 +58,43 @@ def test_llm_outage_falls_back_to_rules():
     q = parse_query_smart("Did vegetation health decrease between June and September?", REF,
                           FakeLLM(LLMError("down")))
     assert q.parser == "rules" and q.operation == Operation.CHANGE_DETECTION
+
+
+def test_explicit_iso_dates_override_different_llm_dates():
+    reply = json.dumps({
+        "operation": "change_detection", "index": "NDVI",
+        "date_a": {"start": "2026-10-09", "end": "2026-10-09"},
+        "date_b": {"start": "2026-10-04", "end": "2026-10-04"},
+    })
+    q = parse_with_llm(
+        "Investigate vegetation changes between 2026-10-04 and 2026-10-29",
+        FakeLLM(reply), REF,
+    )
+    assert q.date_a.start == date(2026, 10, 4)
+    assert q.date_b.start == date(2026, 10, 29)
+
+
+def test_explicit_iso_dates_override_different_valid_llm_ranges():
+    reply = json.dumps({
+        "operation": "change_detection", "index": "NDVI",
+        "date_a": {"start": "2026-01-01", "end": "2026-01-31"},
+        "date_b": {"start": "2026-02-01", "end": "2026-02-28"},
+    })
+    q = parse_with_llm(
+        "Compare NDVI on 2026-10-04 and 2026-10-29",
+        FakeLLM(reply), REF,
+    )
+    assert q.date_a == DateRange(start=date(2026, 10, 4), end=date(2026, 10, 4))
+    assert q.date_b == DateRange(start=date(2026, 10, 29), end=date(2026, 10, 29))
+
+
+def test_without_two_explicit_iso_dates_preserves_llm_dates():
+    q = parse_with_llm(
+        "Compare NDVI between June and September",
+        FakeLLM(CHANGE_JSON), REF,
+    )
+    assert q.date_a.start == date(2026, 6, 1)
+    assert q.date_b.start == date(2026, 9, 1)
 
 
 def test_no_client_uses_rules():

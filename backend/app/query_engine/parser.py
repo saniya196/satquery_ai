@@ -8,6 +8,23 @@ from app.schemas.query import DateRange, Operation, StructuredQuery
 
 _MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
 _MONTHS.update({m.lower(): i for i, m in enumerate(calendar.month_abbr) if m})
+_MONTHS.update({
+    "जनवरी": 1,
+    "फरवरी": 2, "फ़रवरी": 2,
+    "मार्च": 3,
+    "अप्रैल": 4,
+    "मई": 5,
+    "जून": 6,
+    "जुलाई": 7,
+    "अगस्त": 8,
+    "सितंबर": 9, "सितम्बर": 9,
+    "अक्टूबर": 10,
+    "नवंबर": 11, "नवम्बर": 11,
+    "दिसंबर": 12, "दिसम्बर": 12,
+})
+_DEVANAGARI_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
+_HINDI_COUNTS = {"एक": 1, "दो": 2, "तीन": 3, "चार": 4, "पांच": 5, "पाँच": 5,
+                 "छह": 6, "सात": 7, "आठ": 8, "नौ": 9, "दस": 10}
 _ISO = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
 _YEAR = re.compile(r"\b(20\d{2})\b")
 
@@ -32,18 +49,33 @@ def _month_range(month: int, year: int) -> DateRange:
 
 
 def _extract_dates(text: str, ref: date) -> list:
-    t = text.lower()
+    t = text.lower().translate(_DEVANAGARI_DIGITS)
     found = []
-    for m in _ISO.finditer(t):
+    iso_matches = list(_ISO.finditer(t))
+    for m in iso_matches:
         d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         found.append((m.start(), DateRange(start=d, end=d)))
-    year_m = _YEAR.search(t)
-    year = int(year_m.group(1)) if year_m else ref.year
+
+    year_matches = list(_YEAR.finditer(t))
+    month_matches = []
     for name, num in _MONTHS.items():
-        for m in re.finditer(rf"\b{name}\b", t):
-            # a month later than the reference month, with no explicit year, means last year
-            y = year if year_m or num <= ref.month else year - 1
-            found.append((m.start(), _month_range(num, y)))
+        for match in re.finditer(rf"(?<!\w){re.escape(name)}(?!\w)", t):
+            month_matches.append((match, num))
+
+    for match, num in month_matches:
+        nearest_year = min(year_matches, key=lambda year_match: abs(year_match.start() - match.start()), default=None)
+        if nearest_year:
+            year = int(nearest_year.group(1))
+        else:
+            # A month later than the reference month, without an explicit year, means last year.
+            year = ref.year if num <= ref.month else ref.year - 1
+        found.append((match.start(), _month_range(num, year)))
+
+    if not month_matches and not iso_matches:
+        for match in year_matches:
+            year = int(match.group(1))
+            found.append((match.start(), DateRange(start=date(year, 1, 1), end=date(year, 12, 31))))
+
     found.sort(key=lambda x: x[0])
     seen, out = set(), []
     for _, r in found:
@@ -54,12 +86,23 @@ def _extract_dates(text: str, ref: date) -> list:
 
 
 def _relative_range(text: str, ref: date) -> Optional[DateRange]:
-    t = text.lower()
-    if "last year" in t or "past year" in t:
+    t = text.lower().translate(_DEVANAGARI_DIGITS)
+    if "last year" in t or "past year" in t or re.search(r"(?:पिछले|पिछला|पिछली)\s+(?:साल|वर्ष)", t):
         return DateRange(start=ref - timedelta(days=365), end=ref)
-    m = re.search(r"last (\d+) months?", t)
+    m = re.search(r"(?:last|past)\s+(\d+)\s+months?", t)
     if m:
         return DateRange(start=ref - timedelta(days=30 * int(m.group(1))), end=ref)
+    m = re.search(r"(?:last|past)\s+(\d+)\s+years?", t)
+    if m:
+        return DateRange(start=ref - timedelta(days=365 * int(m.group(1))), end=ref)
+    m = re.search(r"(?:पिछले|पिछला|पिछली)\s+(\d+|एक|दो|तीन|चार|पांच|पाँच|छह|सात|आठ|नौ|दस)\s+(?:महीने|महीनों|माह)", t)
+    if m:
+        count = int(m.group(1)) if m.group(1).isdigit() else _HINDI_COUNTS[m.group(1)]
+        return DateRange(start=ref - timedelta(days=30 * count), end=ref)
+    m = re.search(r"(?:पिछले|पिछला|पिछली)\s+(\d+|एक|दो|तीन|चार|पांच|पाँच|छह|सात|आठ|नौ|दस)\s+(?:साल|सालों|वर्ष|वर्षों)", t)
+    if m:
+        count = int(m.group(1)) if m.group(1).isdigit() else _HINDI_COUNTS[m.group(1)]
+        return DateRange(start=ref - timedelta(days=365 * count), end=ref)
     return None
 
 

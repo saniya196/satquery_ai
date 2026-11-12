@@ -128,9 +128,16 @@ def run_uploaded_land_cover(cube, raster, filename: str, classifier: LandCoverCl
 
 
 def run_land_cover(provider: SatelliteProvider, aoi: dict, rng: DateRange, classifier: LandCoverClassifier,
-                   max_cloud: float = settings.max_scene_cloud_cover, llm_fn: Optional[Callable] = None) -> dict:
-    scene_meta = provider.best_scene(aoi, rng.start, rng.end, max_cloud)
-    sc = provider.get_scene(aoi, scene_meta["item_id"], list(classifier.bands_logical))
+                   max_cloud: float = settings.max_scene_cloud_cover, llm_fn: Optional[Callable] = None,
+                   selected_scene_id: Optional[str] = None,
+                   compare_utc_date: bool = False) -> dict:
+    if selected_scene_id:
+        sc = provider.get_selected_scene(aoi, selected_scene_id, list(classifier.bands_logical),
+                                         rng.start, rng.end, max_cloud,
+                                         use_utc_calendar_date=compare_utc_date)
+    else:
+        scene_meta = provider.best_scene(aoi, rng.start, rng.end, max_cloud)
+        sc = provider.get_scene(aoi, scene_meta["item_id"], list(classifier.bands_logical))
     bands = [sc.bands[b] for b in classifier.bands_logical]
     cube = np.stack(bands).astype(np.float32)
     valid = build_valid_mask(sc.scl, sc.inside_aoi, bands)
@@ -158,7 +165,13 @@ def run_land_cover(provider: SatelliteProvider, aoi: dict, rng: DateRange, class
     ev = Evidence(
         operation="land_cover",
         scenes=[SceneRef(item_id=sc.item_id, datetime=sc.datetime, cloud_cover=sc.cloud_cover,
-                         resolution_m=sc.resolution_m, crs=sc.crs)],
+                         resolution_m=sc.resolution_m, crs=sc.crs,
+                         provider=getattr(sc, "provider", None), collection=getattr(sc, "collection", None),
+                         platform=getattr(sc, "platform", None),
+                         processing_level=getattr(sc, "processing_level", None),
+                         coverage_fraction=getattr(sc, "coverage_fraction", None),
+                         source=getattr(sc, "source", None), sensor=getattr(sc, "sensor", None),
+                         sensor_identity=getattr(sc, "sensor_identity", "unknown"))],
         aoi_area_km2=n_aoi * px / 1e6,
         bands=" / ".join(BAND_IDS.get(b, b) for b in classifier.bands_logical),
         preprocessing=sc.preprocessing + [

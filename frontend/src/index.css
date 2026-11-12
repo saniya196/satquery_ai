@@ -1,19 +1,64 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
 :root {
   font-family: 'Manrope', 'Aptos', sans-serif;
-  color: #252b23;
-  background: #e7e9df;
+  color: #e8eef5;
+  background: #060b14;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   --mono: 'DM Mono', Consolas, monospace;
+  --font-display: 'Space Grotesk', 'Manrope', sans-serif;
+  --bg: #060b14;
+  --bg-deep: #040810;
+  --surface: #0d1522;
+  --surface-soft: #111d2b;
+  --panel-secondary: #162436;
+  --ink: #e8eef5;
+  --ink-2: #c3d0e2;
+  --muted: #8b9cb3;
+  --border: #2d4059;
+  --border-soft: #1f3048;
+  --primary: #35d5f2;
+  --primary-deep: #1aa8c6;
+  --primary-soft: rgba(53, 213, 242, 0.12);
+  --primary-glow: rgba(53, 213, 242, 0.35);
+  --secondary: #568bff;
+  --accent: #35d5f2;
+  --accent-glow: rgba(53, 213, 242, 0.25);
+  --success: #4ade80;
+  --success-soft: rgba(74, 222, 128, 0.12);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.12);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.12);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(53, 213, 242, 0.15);
+  --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; min-width: 320px; height: 100%; margin: 0; }
-body { min-height: 100dvh; letter-spacing: 0; }
+body {
+  min-height: 100dvh;
+  letter-spacing: 0;
+  background: var(--bg);
+  color: var(--ink);
+}
 button, input, textarea { font: inherit; }
 button { color: inherit; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid #658444; outline-offset: 2px; }
-::selection { color: #20271f; background: #d3ea6d; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid #35d5f2; outline-offset: 2px; }
+::selection { color: #060b14; background: #35d5f2; }
+
+/* Mission-control scrollbars */
+* { scrollbar-color: #2d4059 transparent; scrollbar-width: thin; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #24344d; border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: #35d5f2; }
+
+/* Date/time inputs inherit the dark scheme */
+input[type='date'], input[type='datetime-local'] { color-scheme: dark; }

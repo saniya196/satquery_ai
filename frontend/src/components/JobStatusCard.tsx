@@ -88,8 +88,19 @@ export const JobStatusCard: React.FC<JobStatusCardProps> = ({ job, activeJobId }
             {provider?.date && (
               <span className="provider-chip">Date: <strong>{provider.date}</strong></span>
             )}
+            {provider?.coverage && (
+              <span className="provider-chip" title={provider.coverage.note || 'Scene footprint coverage of AOI'}>
+                Coverage: <strong>{provider.coverage.status === 'full' ? 'Full' : provider.coverage.status === 'partial' ? 'Partial' : 'Unknown'}{typeof provider.coverage.fraction === 'number' && Number.isFinite(provider.coverage.fraction) ? ` (${(provider.coverage.fraction * 100).toFixed(1)}%)` : ''}</strong>
+              </span>
+            )}
           </div>
         </div>
+        {provider?.coverage?.status === 'partial' && (
+          <p className="coverage-note">Partial scene coverage: statistics may represent only the covered portion of the AOI.</p>
+        )}
+        {status === 'failed' && provider?.coverage?.status === 'partial' && (
+          <p className="coverage-note">Analysis failed due to insufficient scene coverage (multiple tiles may be required).</p>
+        )}
       </div>
     </div>
   )

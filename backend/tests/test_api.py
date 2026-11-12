@@ -83,6 +83,10 @@ def test_imagery_scenes_returns_sorted_fakes_and_validates_aoi():
     items = response.json()
     assert [item["item_id"] for item in items] == ["A", "B"]
     assert [item["datetime"] for item in items] == sorted(item["datetime"] for item in items)
+    assert all(item["sensor"] == "Sentinel-2 L2A" for item in items)
+    assert all(item["collection"] == "sentinel-2-l2a" for item in items)
+    assert all(item["data_available"] is True for item in items)
+    assert all("preview_url" in item for item in items)
 
     invalid = client.post("/imagery/scenes", json={
         "aoi": {"type": "Point", "coordinates": [0, 0]},
@@ -103,7 +107,11 @@ def test_imagery_scenes_caps_provider_results_at_100(monkeypatch):
         "aoi": AOI, "start": "2026-01-01", "end": "2026-12-31", "max_cloud": 40,
     })
     assert response.status_code == 200
-    assert len(response.json()) == 100
+    items = response.json()
+    assert len(items) == 100
+    assert items[0]["sensor"] == "Sentinel-2 L2A"
+    assert items[0]["data_available"] is True
+    assert "preview_url" in items[0]
 
 
 def test_parse_endpoint():

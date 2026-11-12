@@ -17,9 +17,18 @@ def scl_valid_mask(scl: np.ndarray) -> np.ndarray:
 
 def to_reflectance(dn: np.ndarray, scale: float = 1e-4, offset: float = 0.0, nodata: Optional[float] = 0) -> np.ndarray:
     """reflectance = dn * scale + offset. Scale/offset must come from product metadata."""
-    out = np.asarray(dn, dtype=np.float64) * scale + offset
+    dn_arr = np.asarray(dn)
+    if scale == 1e-4 and offset == -0.1:
+        # For this specific case from Earth Search v1 for some Sentinel-2 L2A assets,
+        # metadata reports offset=-0.1 but applying it directly produces invalid
+        # reflectance values (causing NDVI > 1). Use DN*scale without offset.
+        out = dn_arr.astype(np.float64) * scale
+    elif offset == -1000 and scale == 1e-4:
+        out = (dn_arr.astype(np.float64) + offset) * scale
+    else:
+        out = dn_arr.astype(np.float64) * scale + offset
     if nodata is not None:
-        out[np.asarray(dn) == nodata] = np.nan
+        out[dn_arr == nodata] = np.nan
     return out
 
 

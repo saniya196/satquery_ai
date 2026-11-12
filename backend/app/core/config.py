@@ -33,6 +33,11 @@ class Settings:
     hotspot_min_pixels: int = 25
     savi_l: float = 0.5
     cache_dir: str = ".cache/satquery"
+    fusion_max_temporal_separation_days: float = 3.0
+    # Local BLIP checkpoint fine-tuned on RSICD for Sentinel-2 RGB captioning.
+    caption_model_dir: str = "models/rsicd_blip_caption"
+    caption_max_new_tokens: int = 40
+    caption_num_beams: int = 3
 
 
 settings = Settings()

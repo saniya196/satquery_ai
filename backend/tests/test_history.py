@@ -15,8 +15,8 @@ client = TestClient(app)
 def fake_history_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("SATQUERY_DB", str(tmp_path / "history.sqlite"))
     provider = FakeProvider([
-        make_scene("A", "2026-06-15T05:00:00+00:00", 0.8, 0.8),
-        make_scene("B", "2026-09-10T05:00:00+00:00", 0.5, 0.8),
+        make_scene("A", "2026-06-15T05:00:00+00:00", 0.8, 0.8, coverage=1.0),
+        make_scene("B", "2026-09-10T05:00:00+00:00", 0.5, 0.8, coverage=1.0),
     ])
     app.dependency_overrides[get_provider] = lambda: provider
     yield
@@ -37,12 +37,17 @@ def test_history_list_detail_and_delete_use_sqlite(fake_history_environment):
 
     listing = client.get("/history")
     assert listing.status_code == 200
-    assert listing.json()["items"][0] == {
+    summary = listing.json()["items"][0]
+    assert summary == {
         "id": job_id,
         "created": client.get(f"/jobs/{job_id}").json()["created"],
         "query": "Did vegetation health decrease between June and September?",
         "status": "completed",
         "operation": "change_detection",
+        "sensor_identity": "unknown",
+        "sensor": None,
+        "acquisition_dates": ["2026-06-15", "2026-09-10"],
+        "aoi_area_km2": pytest.approx(client.get(f"/history/{job_id}").json()["result"]["evidence"]["aoi_area_km2"]),
     }
     assert "result" not in listing.json()["items"][0]
 

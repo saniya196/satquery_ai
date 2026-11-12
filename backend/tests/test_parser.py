@@ -46,3 +46,47 @@ def test_hindi_and_english_map_to_same_intent():
 def test_iso_dates():
     q = parse_query("Compare NDVI between 2026-01-10 and 2026-09-10", REF)
     assert q.date_a.start == date(2026, 1, 10) and q.date_b.start == date(2026, 9, 10)
+
+
+def test_hindi_month_and_year_parse_without_llm():
+    q = parse_query("जून 2026 में NDVI दिखाएं", REF)
+    assert q.language == "hi" and q.operation == Operation.INDEX_STATS
+    assert q.date_a.start == date(2026, 6, 1) and q.date_a.end == date(2026, 6, 30)
+    assert not q.missing
+
+
+def test_hindi_last_year_trend_parses_without_llm():
+    q = parse_query("पिछले साल का NDVI रुझान दिखाएं", REF)
+    assert q.language == "hi" and q.operation == Operation.TIME_SERIES
+    assert q.series_range.start == date(2025, 10, 7) and q.series_range.end == REF
+    assert not q.missing
+
+
+def test_hindi_relative_month_range_accepts_devanagari_digits():
+    q = parse_query("पिछले १२ महीनों का NDVI रुझान", REF)
+    assert q.language == "hi" and q.operation == Operation.TIME_SERIES
+    assert q.series_range.start == date(2025, 10, 12) and q.series_range.end == REF
+    assert not q.missing
+
+
+def test_explicit_multi_year_trend_uses_full_calendar_years():
+    q = parse_query("Show NDVI trend from 2022 to 2025", REF)
+    assert q.operation == Operation.TIME_SERIES
+    assert q.series_range.start == date(2022, 1, 1)
+    assert q.series_range.end == date(2025, 12, 31)
+    assert not q.missing
+
+
+def test_hindi_explicit_multi_year_trend_uses_calendar_year_bounds():
+    q = parse_query("2023 से 2025 तक NDVI का रुझान दिखाएं", REF)
+    assert q.language == "hi" and q.operation == Operation.TIME_SERIES
+    assert q.series_range.start == date(2023, 1, 1)
+    assert q.series_range.end == date(2025, 12, 31)
+    assert not q.missing
+
+
+def test_year_only_index_query_uses_the_explicit_calendar_year():
+    q = parse_query("Show NDWI for 2025", REF)
+    assert q.operation == Operation.INDEX_STATS and q.index == "NDWI"
+    assert q.date_a.start == date(2025, 1, 1) and q.date_a.end == date(2025, 12, 31)
+    assert not q.missing

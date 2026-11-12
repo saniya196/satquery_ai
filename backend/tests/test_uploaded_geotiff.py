@@ -35,6 +35,8 @@ def test_uploaded_result_uses_real_pixels_and_only_reports_supported_area():
     assert result["stats"]["mean"] == 7 / 3
     assert result["stats"]["analysed_area_km2"] == 0.0003
     assert result["evidence"]["valid_pixel_fraction"] == 0.75
+    assert result["evidence"]["source"] == "user-uploaded GeoTIFF"
+    assert "sensor_identity" not in result["evidence"]
 
 
 def test_uploaded_result_does_not_invent_area_for_degree_crs():
