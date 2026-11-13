@@ -172,5 +172,7 @@ def test_gemini_failures_raise_llmerror_without_leaking_key(resp):
 def test_factory_returns_none_without_key(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     assert get_llm_client() is None
+    monkeypatch.setenv("GEMINI_API_KEY", "replace-me-with-your-gemini-api-key")
+    assert get_llm_client() is None
     monkeypatch.setenv("GEMINI_API_KEY", "abc")
     assert isinstance(get_llm_client(), GeminiClient)

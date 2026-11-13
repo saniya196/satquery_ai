@@ -47,7 +47,12 @@ class GeminiClient(LLMClient):
             raise LLMError(f"Gemini request failed: {type(exc).__name__}") from exc  # never echo the key
 
 
+_GEMINI_KEY_PLACEHOLDER = "replace-me-with-your-gemini-api-key"
+
+
 def get_llm_client() -> Optional[LLMClient]:
-    """None when no key is configured -> the app runs on the rule-based parser + template answers."""
+    """None without a real configured key; the app then uses rules and template answers."""
     key = os.getenv("GEMINI_API_KEY", "").strip()
-    return GeminiClient(key) if key else None
+    if not key or key.casefold() == _GEMINI_KEY_PLACEHOLDER:
+        return None
+    return GeminiClient(key)

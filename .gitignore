@@ -30,6 +30,12 @@ venv/
 .env
 .env.*
 !.env.example
+# Local private keys and credential bundles
+secrets/
+*.key
+*.pem
+*.p12
+*.pfx
 
 # ---- Node dependencies ----
 node_modules/
